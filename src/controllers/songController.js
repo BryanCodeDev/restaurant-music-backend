@@ -1,7 +1,43 @@
-// src/controllers/songController.js - VERSION COMPLETAMENTE CORREGIDA
+// src/controllers/songController.js - FIXED FOR MYSQL2 PARAMETER TYPES
 const { executeQuery } = require('../config/database');
 const { logger } = require('../utils/logger');
-const { formatSuccessResponse, formatErrorResponse, paginate, calculatePagination } = require('../utils/helpers');
+
+// Helper function to format success response
+const formatSuccessResponse = (message, data) => ({
+  success: true,
+  message,
+  data
+});
+
+// Helper function to format error response
+const formatErrorResponse = (message, details = null) => ({
+  success: false,
+  message,
+  ...(details && { details })
+});
+
+// Helper function for pagination
+const paginate = (page = 1, limit = 20) => {
+  const currentPage = Math.max(1, parseInt(page) || 1);
+  const currentLimit = Math.min(100, Math.max(1, parseInt(limit) || 20));
+  const offset = (currentPage - 1) * currentLimit;
+  
+  return { page: currentPage, limit: currentLimit, offset };
+};
+
+// Helper function to calculate pagination info
+const calculatePagination = (total, page, limit) => {
+  const totalPages = Math.ceil(total / limit);
+  
+  return {
+    total,
+    page,
+    limit,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1
+  };
+};
 
 // Obtener todas las canciones de un restaurante
 const getSongs = async (req, res) => {
@@ -14,13 +50,15 @@ const getSongs = async (req, res) => {
     // Obtener información de paginación
     const { page: currentPage, limit: currentLimit, offset } = paginate(page, limit);
     
-    // Buscar restaurante - QUERY SIMPLIFICADO Y CORREGIDO
-    const { rows: restaurantRows } = await executeQuery(
+    // Buscar restaurante
+    const restaurantResult = await executeQuery(
       'SELECT id, name FROM restaurants WHERE slug = ? AND is_active = 1',
       [restaurantSlug]
     );
     
-    if (restaurantRows.length === 0) {
+    const restaurantRows = restaurantResult.rows;
+    
+    if (!restaurantRows || restaurantRows.length === 0) {
       logger.warn('Restaurant not found:', restaurantSlug);
       return res.status(404).json(
         formatErrorResponse('Restaurant not found')
@@ -30,7 +68,7 @@ const getSongs = async (req, res) => {
     const restaurant = restaurantRows[0];
     logger.info('Restaurant found:', restaurant);
     
-    // Construir query base - COMPLETAMENTE SIMPLIFICADO
+    // Construir query base
     let query = `
       SELECT id, title, artist, album, duration, year, image, genre, 
              popularity, energy, is_explicit, times_requested
@@ -46,7 +84,6 @@ const getSongs = async (req, res) => {
     }
     
     if (search && search.trim()) {
-      // BÚSQUEDA SIMPLE CON LIKE - SIN FULLTEXT
       query += ' AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)';
       const searchTerm = `%${search.trim()}%`;
       params.push(searchTerm, searchTerm, searchTerm);
@@ -58,16 +95,21 @@ const getSongs = async (req, res) => {
       'SELECT COUNT(*) as total'
     );
     
-    const { rows: countRows } = await executeQuery(countQuery, params);
-    const total = countRows[0].total;
+    const countResult = await executeQuery(countQuery, params);
+    const total = countResult.rows[0].total;
     
-    // Agregar paginación y ordenamiento
+    // CORREGIDO: Convertir números a strings para MySQL2
     query += ' ORDER BY popularity DESC, times_requested DESC LIMIT ? OFFSET ?';
-    params.push(currentLimit, offset);
+    params.push(currentLimit.toString(), offset.toString());
     
-    logger.info('Executing query:', { query: query.substring(0, 100), paramCount: params.length });
+    logger.info('Executing query:', { 
+      query: query.substring(0, 100) + '...', 
+      paramCount: params.length,
+      params: params
+    });
     
-    const { rows: songs } = await executeQuery(query, params);
+    const songsResult = await executeQuery(query, params);
+    const songs = songsResult.rows;
     
     // Calcular paginación
     const pagination = calculatePagination(total, currentPage, currentLimit);
@@ -114,20 +156,20 @@ const searchSongs = async (req, res) => {
     }
     
     // Buscar restaurante
-    const { rows: restaurantRows } = await executeQuery(
+    const restaurantResult = await executeQuery(
       'SELECT id FROM restaurants WHERE slug = ? AND is_active = 1',
       [restaurantSlug]
     );
     
-    if (restaurantRows.length === 0) {
+    if (!restaurantResult.rows || restaurantResult.rows.length === 0) {
       return res.status(404).json(
         formatErrorResponse('Restaurant not found')
       );
     }
     
-    const restaurant = restaurantRows[0];
+    const restaurant = restaurantResult.rows[0];
     
-    // Query de búsqueda SIMPLIFICADO
+    // Query de búsqueda
     let searchQuery = `
       SELECT id, title, artist, album, duration, year, image, genre, 
              popularity, energy, times_requested
@@ -146,14 +188,15 @@ const searchSongs = async (req, res) => {
     }
     
     searchQuery += ' ORDER BY popularity DESC LIMIT ?';
-    params.push(parseInt(limit));
+    // CORREGIDO: Convertir a string
+    params.push(parseInt(limit).toString());
     
-    const { rows: songs } = await executeQuery(searchQuery, params);
+    const songsResult = await executeQuery(searchQuery, params);
     
     res.json(formatSuccessResponse('Search completed', {
-      songs,
+      songs: songsResult.rows,
       query,
-      total: songs.length
+      total: songsResult.rows.length
     }));
     
   } catch (error) {
@@ -171,32 +214,32 @@ const getPopularSongs = async (req, res) => {
     const { limit = 10 } = req.query;
     
     // Buscar restaurante
-    const { rows: restaurantRows } = await executeQuery(
+    const restaurantResult = await executeQuery(
       'SELECT id FROM restaurants WHERE slug = ? AND is_active = 1',
       [restaurantSlug]
     );
     
-    if (restaurantRows.length === 0) {
+    if (!restaurantResult.rows || restaurantResult.rows.length === 0) {
       return res.status(404).json(
         formatErrorResponse('Restaurant not found')
       );
     }
     
-    const restaurant = restaurantRows[0];
+    const restaurant = restaurantResult.rows[0];
     
     // Obtener canciones populares
-    const { rows: songs } = await executeQuery(
+    const songsResult = await executeQuery(
       `SELECT id, title, artist, album, duration, year, image, genre, 
               popularity, energy, times_requested
        FROM songs 
        WHERE restaurant_id = ? AND is_active = 1
        ORDER BY popularity DESC, times_requested DESC 
        LIMIT ?`,
-      [restaurant.id, parseInt(limit)]
+      [restaurant.id, parseInt(limit).toString()]
     );
     
     res.json(formatSuccessResponse('Popular songs retrieved', {
-      songs
+      songs: songsResult.rows
     }));
     
   } catch (error) {
@@ -214,34 +257,34 @@ const getSongsByGenre = async (req, res) => {
     const { limit = 20 } = req.query;
     
     // Buscar restaurante
-    const { rows: restaurantRows } = await executeQuery(
+    const restaurantResult = await executeQuery(
       'SELECT id FROM restaurants WHERE slug = ? AND is_active = 1',
       [restaurantSlug]
     );
     
-    if (restaurantRows.length === 0) {
+    if (!restaurantResult.rows || restaurantResult.rows.length === 0) {
       return res.status(404).json(
         formatErrorResponse('Restaurant not found')
       );
     }
     
-    const restaurant = restaurantRows[0];
+    const restaurant = restaurantResult.rows[0];
     
     // Obtener canciones del género
-    const { rows: songs } = await executeQuery(
+    const songsResult = await executeQuery(
       `SELECT id, title, artist, album, duration, year, image, genre, 
               popularity, energy, times_requested
        FROM songs 
        WHERE restaurant_id = ? AND genre = ? AND is_active = 1
        ORDER BY popularity DESC, times_requested DESC 
        LIMIT ?`,
-      [restaurant.id, genre, parseInt(limit)]
+      [restaurant.id, genre, parseInt(limit).toString()]
     );
     
     res.json(formatSuccessResponse(`${genre} songs retrieved`, {
-      songs,
+      songs: songsResult.rows,
       genre,
-      total: songs.length
+      total: songsResult.rows.length
     }));
     
   } catch (error) {
@@ -258,21 +301,21 @@ const getSongDetails = async (req, res) => {
     const { restaurantSlug, songId } = req.params;
     
     // Buscar restaurante
-    const { rows: restaurantRows } = await executeQuery(
+    const restaurantResult = await executeQuery(
       'SELECT id FROM restaurants WHERE slug = ? AND is_active = 1',
       [restaurantSlug]
     );
     
-    if (restaurantRows.length === 0) {
+    if (!restaurantResult.rows || restaurantResult.rows.length === 0) {
       return res.status(404).json(
         formatErrorResponse('Restaurant not found')
       );
     }
     
-    const restaurant = restaurantRows[0];
+    const restaurant = restaurantResult.rows[0];
     
     // Buscar canción
-    const { rows: songRows } = await executeQuery(
+    const songResult = await executeQuery(
       `SELECT id, title, artist, album, duration, year, spotify_id, 
               preview_url, image, genre, popularity, energy, is_explicit, 
               times_requested, created_at
@@ -281,16 +324,16 @@ const getSongDetails = async (req, res) => {
       [songId, restaurant.id]
     );
     
-    if (songRows.length === 0) {
+    if (!songResult.rows || songResult.rows.length === 0) {
       return res.status(404).json(
         formatErrorResponse('Song not found')
       );
     }
     
-    const song = songRows[0];
+    const song = songResult.rows[0];
     
     // Obtener estadísticas adicionales
-    const { rows: statsRows } = await executeQuery(
+    const statsResult = await executeQuery(
       `SELECT 
         COUNT(*) as total_requests,
         COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_requests,
@@ -303,7 +346,7 @@ const getSongDetails = async (req, res) => {
     res.json(formatSuccessResponse('Song details retrieved', {
       song: {
         ...song,
-        stats: statsRows[0] || {}
+        stats: statsResult.rows[0] || {}
       }
     }));
     
@@ -321,21 +364,21 @@ const getGenres = async (req, res) => {
     const { restaurantSlug } = req.params;
     
     // Buscar restaurante
-    const { rows: restaurantRows } = await executeQuery(
+    const restaurantResult = await executeQuery(
       'SELECT id FROM restaurants WHERE slug = ? AND is_active = 1',
       [restaurantSlug]
     );
     
-    if (restaurantRows.length === 0) {
+    if (!restaurantResult.rows || restaurantResult.rows.length === 0) {
       return res.status(404).json(
         formatErrorResponse('Restaurant not found')
       );
     }
     
-    const restaurant = restaurantRows[0];
+    const restaurant = restaurantResult.rows[0];
     
     // Obtener géneros únicos con conteo
-    const { rows: genres } = await executeQuery(
+    const genresResult = await executeQuery(
       `SELECT genre, COUNT(*) as count
        FROM songs 
        WHERE restaurant_id = ? AND is_active = 1
@@ -345,7 +388,7 @@ const getGenres = async (req, res) => {
     );
     
     res.json(formatSuccessResponse('Genres retrieved', {
-      genres
+      genres: genresResult.rows
     }));
     
   } catch (error) {

@@ -1,7 +1,8 @@
-// src/routes/songs.js
+// src/routes/songs.js - FIXED GENRE VALIDATION
 const express = require('express');
-const { param, query } = require('express-validator');
-const { validate } = require('../middleware/validation');
+const router = express.Router();
+const { body, param, query } = require('express-validator');
+
 const {
   getSongs,
   searchSongs,
@@ -11,93 +12,179 @@ const {
   getGenres
 } = require('../controllers/songController');
 
-const router = express.Router();
+const {
+  validate,
+  validateOptionalQueryParams
+} = require('../middleware/validation');
 
 // Validaciones comunes
-const restaurantValidation = [
+const restaurantSlugValidation = [
   param('restaurantSlug')
-    .isSlug()
-    .withMessage('Invalid restaurant identifier')
+    .isLength({ min: 3, max: 100 })
+    .matches(/^[a-z0-9-]+$/)
+    .withMessage('Restaurant slug must contain only lowercase letters, numbers and hyphens')
 ];
 
-const songValidation = [
-  ...restaurantValidation,
+const songIdValidation = [
   param('songId')
-    .isUUID()
-    .withMessage('Valid song ID is required')
+    .notEmpty()
+    .withMessage('Song ID is required')
 ];
 
+// CORREGIDO: Validación de género más permisiva
 const genreValidation = [
-  ...restaurantValidation,
-  param('genre')
-    .isAlpha()
-    .isLength({ min: 2, max: 20 })
-    .withMessage('Invalid genre')
+  query('genre')
+    .optional()
+    .custom((value) => {
+      // Lista expandida de géneros permitidos
+      const allowedGenres = [
+        'all', // Opción especial para "todos los géneros"
+        'rock', 'pop', 'electronic', 'hip-hop', 'hiphop', 'jazz', 
+        'reggaeton', 'salsa', 'ballad', 'classical', 'reggae', 
+        'funk', 'country', 'blues', 'r&b', 'rnb', 'latin', 
+        'folk', 'indie', 'metal', 'punk', 'disco', 'house', 
+        'techno', 'ambient', 'world', 'rap', 'trap', 'dancehall',
+        'cumbia', 'merengue', 'bachata', 'flamenco', 'tango',
+        'vallenato', 'ranchera', 'mariachi', 'alternative', 
+        'grunge', 'ska', 'swing', 'gospel', 'soul', 'edm',
+        'dubstep', 'trance', 'drum-and-bass', 'dnb'
+      ];
+      
+      const normalizedValue = value.toLowerCase().trim();
+      
+      if (!allowedGenres.includes(normalizedValue)) {
+        throw new Error(`Invalid genre. Received: "${value}". Must be one of: ${allowedGenres.slice(0, 15).join(', ')}...`);
+      }
+      
+      return true;
+    })
 ];
 
 const searchValidation = [
-  ...restaurantValidation,
   query('q')
     .isLength({ min: 2, max: 100 })
-    .withMessage('Search query must be between 2 and 100 characters'),
-  
-  query('genre')
-    .optional()
-    .isAlpha()
-    .isLength({ min: 2, max: 20 })
-    .withMessage('Invalid genre'),
-    
-  query('limit')
-    .optional()
-    .isInt({ min: 1, max: 50 })
-    .withMessage('Limit must be between 1 and 50')
+    .withMessage('Search query must be between 2 and 100 characters')
+    .trim()
 ];
 
-const listValidation = [
-  ...restaurantValidation,
-  query('genre')
+const paginationValidation = [
+  query('page')
     .optional()
-    .isAlpha()
-    .withMessage('Invalid genre'),
-    
+    .isInt({ min: 1, max: 1000 })
+    .withMessage('Page must be a positive integer (max 1000)')
+    .toInt(),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100')
+    .toInt()
+];
+
+// Rutas principales
+
+// GET /songs/:restaurantSlug - Obtener canciones con filtros opcionales
+router.get('/:restaurantSlug', [
+  ...restaurantSlugValidation,
+  ...genreValidation,
+  ...paginationValidation,
   query('search')
     .optional()
     .isLength({ min: 2, max: 100 })
-    .withMessage('Search must be between 2 and 100 characters'),
-    
-  query('page')
-    .optional()
-    .isInt({ min: 1 })
-    .withMessage('Page must be a positive integer'),
-    
+    .withMessage('Search term must be between 2 and 100 characters')
+    .trim(),
+  validateOptionalQueryParams(['page', 'limit', 'genre', 'search', 'sort']),
+  validate
+], getSongs);
+
+// GET /songs/:restaurantSlug/search - Buscar canciones
+router.get('/:restaurantSlug/search', [
+  ...restaurantSlugValidation,
+  ...searchValidation,
+  ...genreValidation,
   query('limit')
     .optional()
     .isInt({ min: 1, max: 50 })
     .withMessage('Limit must be between 1 and 50')
-];
+    .toInt(),
+  validate
+], searchSongs);
 
-const popularValidation = [
-  ...restaurantValidation,
-  query('limit')
-    .optional()
-    .isInt({ min: 1, max: 20 })
-    .withMessage('Limit must be between 1 and 20')
-];
-
-const genreListValidation = [
-  ...restaurantValidation,
+// GET /songs/:restaurantSlug/popular - Canciones populares
+router.get('/:restaurantSlug/popular', [
+  ...restaurantSlugValidation,
   query('limit')
     .optional()
     .isInt({ min: 1, max: 50 })
     .withMessage('Limit must be between 1 and 50')
-];
+    .toInt(),
+  validate
+], getPopularSongs);
 
-// Rutas públicas
-router.get('/:restaurantSlug', listValidation, validate, getSongs);
-router.get('/:restaurantSlug/search', searchValidation, validate, searchSongs);
-router.get('/:restaurantSlug/popular', popularValidation, validate, getPopularSongs);
-router.get('/:restaurantSlug/genres', restaurantValidation, validate, getGenres);
-router.get('/:restaurantSlug/genre/:genre', genreListValidation, validate, getSongsByGenre);
-router.get('/:restaurantSlug/song/:songId', songValidation, validate, getSongDetails);
+// GET /songs/:restaurantSlug/genres - Obtener géneros disponibles
+router.get('/:restaurantSlug/genres', [
+  ...restaurantSlugValidation,
+  validate
+], getGenres);
+
+// GET /songs/:restaurantSlug/genre/:genre - Canciones por género específico
+router.get('/:restaurantSlug/genre/:genre', [
+  ...restaurantSlugValidation,
+  param('genre')
+    .notEmpty()
+    .withMessage('Genre is required')
+    .custom((value) => {
+      const allowedGenres = [
+        'rock', 'pop', 'electronic', 'hip-hop', 'hiphop', 'jazz', 
+        'reggaeton', 'salsa', 'ballad', 'classical', 'reggae', 
+        'funk', 'country', 'blues', 'r&b', 'rnb', 'latin', 
+        'folk', 'indie', 'metal', 'punk', 'disco', 'house', 
+        'techno', 'ambient', 'world'
+      ];
+      
+      if (!allowedGenres.includes(value.toLowerCase())) {
+        throw new Error(`Invalid genre: ${value}`);
+      }
+      
+      return true;
+    }),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 100 })
+    .withMessage('Limit must be between 1 and 100')
+    .toInt(),
+  validate
+], getSongsByGenre);
+
+// GET /songs/:restaurantSlug/song/:songId - Detalles de canción específica
+router.get('/:restaurantSlug/song/:songId', [
+  ...restaurantSlugValidation,
+  ...songIdValidation,
+  validate
+], getSongDetails);
+
+// Middleware de manejo de errores específico para esta ruta
+router.use((error, req, res, next) => {
+  console.error('Songs route error:', error);
+  
+  if (error.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid JSON in request body'
+    });
+  }
+  
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      success: false,
+      message: 'File too large'
+    });
+  }
+  
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error in songs route',
+    ...(process.env.NODE_ENV === 'development' && { error: error.message })
+  });
+});
 
 module.exports = router;

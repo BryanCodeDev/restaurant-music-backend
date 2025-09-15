@@ -1,7 +1,13 @@
-// src/routes/requests.js
+// src/routes/requests.js - FINAL VERSION WITH PROPER VALIDATION
 const express = require('express');
 const { body, param, query } = require('express-validator');
-const { validate } = require('../middleware/validation');
+const { 
+  validate, 
+  validateSongId, 
+  validateRequestId, 
+  validateSongExistsInRestaurant,
+  validateOptionalQueryParams 
+} = require('../middleware/validation');
 const { authenticateToken, optionalAuth } = require('../middleware/auth');
 const {
   createRequest,
@@ -14,14 +20,14 @@ const {
 
 const router = express.Router();
 
-// Validaciones
+// Validaciones mejoradas
 const createRequestValidation = [
   param('restaurantSlug')
     .isSlug()
     .withMessage('Invalid restaurant identifier'),
   
   body('songId')
-    .isUUID()
+    .custom(validateSongId)
     .withMessage('Valid song ID is required'),
   
   body('tableNumber')
@@ -33,7 +39,7 @@ const createRequestValidation = [
 
 const cancelRequestValidation = [
   param('requestId')
-    .isUUID()
+    .custom(validateRequestId)
     .withMessage('Valid request ID is required'),
   
   body('tableNumber')
@@ -45,7 +51,7 @@ const cancelRequestValidation = [
 
 const updateStatusValidation = [
   param('requestId')
-    .isUUID()
+    .custom(validateRequestId)
     .withMessage('Valid request ID is required'),
   
   body('status')
@@ -58,6 +64,8 @@ const queueValidation = [
     .isSlug()
     .withMessage('Invalid restaurant identifier'),
   
+  validateOptionalQueryParams(['status', 'page', 'limit']),
+  
   query('status')
     .optional()
     .isIn(['pending', 'playing', 'completed', 'cancelled', 'all'])
@@ -66,11 +74,13 @@ const queueValidation = [
   query('page')
     .optional()
     .isInt({ min: 1 })
+    .toInt()
     .withMessage('Page must be a positive integer'),
     
   query('limit')
     .optional()
     .isInt({ min: 1, max: 100 })
+    .toInt()
     .withMessage('Limit must be between 1 and 100')
 ];
 
@@ -78,6 +88,8 @@ const userRequestsValidation = [
   param('restaurantSlug')
     .isSlug()
     .withMessage('Invalid restaurant identifier'),
+    
+  validateOptionalQueryParams(['tableNumber']),
     
   query('tableNumber')
     .optional()
@@ -91,22 +103,60 @@ const statsValidation = [
     .isSlug()
     .withMessage('Invalid restaurant identifier'),
     
+  validateOptionalQueryParams(['period']),
+    
   query('period')
     .optional()
     .isIn(['1h', '24h', '7d', '30d'])
     .withMessage('Period must be one of: 1h, 24h, 7d, 30d')
 ];
 
-// Rutas públicas (sin autenticación requerida)
-router.post('/:restaurantSlug', createRequestValidation, validate, createRequest);
-router.get('/:restaurantSlug/user', userRequestsValidation, validate, getUserRequests);
-router.get('/:restaurantSlug/stats', statsValidation, validate, getRequestStats);
+// === RUTAS PÚBLICAS ===
+// Crear nueva petición musical
+router.post('/:restaurantSlug', 
+  createRequestValidation, 
+  validate, 
+  createRequest
+);
 
-// Rutas que requieren identificación opcional
-router.delete('/:requestId', optionalAuth, cancelRequestValidation, validate, cancelRequest);
+// Obtener peticiones de usuario específico
+router.get('/:restaurantSlug/user', 
+  userRequestsValidation, 
+  validate, 
+  getUserRequests
+);
 
-// Rutas protegidas (solo restaurantes autenticados)
-router.get('/:restaurantSlug/queue', authenticateToken, queueValidation, validate, getRestaurantQueue);
-router.patch('/:requestId/status', authenticateToken, updateStatusValidation, validate, updateRequestStatus);
+// Obtener estadísticas de peticiones
+router.get('/:restaurantSlug/stats', 
+  statsValidation, 
+  validate, 
+  getRequestStats
+);
+
+// === RUTAS CON AUTENTICACIÓN OPCIONAL ===
+// Cancelar petición (puede ser por usuario o admin)
+router.delete('/:requestId', 
+  optionalAuth, 
+  cancelRequestValidation, 
+  validate, 
+  cancelRequest
+);
+
+// === RUTAS PROTEGIDAS (SOLO ADMINS) ===
+// Obtener cola completa del restaurante
+router.get('/:restaurantSlug/queue', 
+  authenticateToken, 
+  queueValidation, 
+  validate, 
+  getRestaurantQueue
+);
+
+// Actualizar estado de petición
+router.patch('/:requestId/status', 
+  authenticateToken, 
+  updateStatusValidation, 
+  validate, 
+  updateRequestStatus
+);
 
 module.exports = router;
