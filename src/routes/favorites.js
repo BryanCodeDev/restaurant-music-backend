@@ -1,7 +1,7 @@
-// src/routes/favorites.js
+// src/routes/favorites.js - FIXED WITH FLEXIBLE VALIDATION
 const express = require('express');
 const { body, param } = require('express-validator');
-const { validate } = require('../middleware/validation');
+const { validate, validateUserId, validateSongId } = require('../middleware/validation');
 const { optionalAuth } = require('../middleware/auth');
 const {
   getUserFavorites,
@@ -11,20 +11,20 @@ const {
 
 const router = express.Router();
 
-// Validaciones
+// CORREGIDO: Validaciones más flexibles para favoritos
 const toggleFavoriteValidation = [
   body('userId')
-    .isUUID()
+    .custom(validateUserId)
     .withMessage('Valid user ID is required'),
   
   body('songId')
-    .isUUID()
+    .custom(validateSongId)
     .withMessage('Valid song ID is required')
 ];
 
 const userFavoritesValidation = [
   param('userId')
-    .isUUID()
+    .custom(validateUserId)
     .withMessage('Valid user ID is required')
 ];
 

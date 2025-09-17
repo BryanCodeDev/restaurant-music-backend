@@ -1,13 +1,25 @@
-// src/controllers/favoriteController.js
+// src/controllers/favoriteController.js - SIMPLIFICADO PARA USUARIOS AUTENTICADOS SOLAMENTE
 const { v4: uuidv4 } = require('uuid');
 const { executeQuery } = require('../config/database');
 const { logger } = require('../utils/logger');
 const { formatSuccessResponse, formatErrorResponse } = require('../utils/helpers');
 
-// Obtener favoritos de un usuario
+// Obtener favoritos de un usuario autenticado
 const getUserFavorites = async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // Verificar que el usuario existe y está autenticado (no es sesión temporal)
+    const { rows: userRows } = await executeQuery(
+      'SELECT id FROM users WHERE id = ? AND name IS NOT NULL AND email IS NOT NULL',
+      [userId]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(404).json(
+        formatErrorResponse('User not found or not authenticated')
+      );
+    }
 
     const { rows } = await executeQuery(
       `SELECT f.id, f.created_at,
@@ -33,10 +45,52 @@ const getUserFavorites = async (req, res) => {
   }
 };
 
-// Alternar favorito (agregar/quitar)
+// Toggle favorito - SOLO PARA USUARIOS AUTENTICADOS
 const toggleFavorite = async (req, res) => {
   try {
     const { userId, songId } = req.body;
+
+    logger.info('Toggle favorite request received:', {
+      userId,
+      songId,
+      ip: req.ip
+    });
+
+    // Validar parámetros requeridos
+    if (!userId || !songId) {
+      return res.status(400).json(
+        formatErrorResponse('User ID and Song ID are required')
+      );
+    }
+
+    // NUEVO: Verificar que el usuario está REALMENTE autenticado (no es sesión temporal)
+    const { rows: userRows } = await executeQuery(
+      'SELECT id, restaurant_id FROM users WHERE id = ? AND name IS NOT NULL AND email IS NOT NULL',
+      [userId]
+    );
+
+    if (userRows.length === 0) {
+      logger.warn('Unauthorized favorite attempt - user not authenticated:', userId);
+      return res.status(401).json(
+        formatErrorResponse('Authentication required', 'Para guardar favoritos necesitas crear una cuenta e iniciar sesión')
+      );
+    }
+
+    const user = userRows[0];
+
+    // Verificar que la canción existe
+    const { rows: songRows } = await executeQuery(
+      'SELECT id, restaurant_id, title, artist FROM songs WHERE id = ? AND is_active = true',
+      [songId]
+    );
+
+    if (songRows.length === 0) {
+      return res.status(404).json(
+        formatErrorResponse('Song not found or inactive')
+      );
+    }
+
+    const song = songRows[0];
 
     // Verificar si ya existe el favorito
     const { rows: existingRows } = await executeQuery(
@@ -51,36 +105,28 @@ const toggleFavorite = async (req, res) => {
         [userId, songId]
       );
 
-      logger.info(`Favorite removed: user ${userId}, song ${songId}`);
+      logger.info(`Favorite removed: ${song.title} by ${song.artist}`);
 
       res.json(formatSuccessResponse('Removed from favorites', {
         added: false,
-        favoriteId: existingRows[0].id
+        favoriteId: existingRows[0].id,
+        song: {
+          id: song.id,
+          title: song.title,
+          artist: song.artist
+        }
       }));
 
     } else {
-      // Obtener información de la canción para validar y obtener restaurant_id
-      const { rows: songRows } = await executeQuery(
-        'SELECT id, restaurant_id, title, artist FROM songs WHERE id = ? AND is_active = true',
-        [songId]
-      );
-
-      if (songRows.length === 0) {
-        return res.status(404).json(
-          formatErrorResponse('Song not found or inactive')
-        );
-      }
-
-      const song = songRows[0];
-
       // Agregar favorito
       const favoriteId = uuidv4();
+      
       await executeQuery(
         'INSERT INTO favorites (id, user_id, song_id, restaurant_id) VALUES (?, ?, ?, ?)',
         [favoriteId, userId, songId, song.restaurant_id]
       );
 
-      logger.info(`Favorite added: user ${userId}, song ${song.title}`);
+      logger.info(`Favorite added: ${song.title} by ${song.artist}`);
 
       res.json(formatSuccessResponse('Added to favorites', {
         added: true,
@@ -94,9 +140,16 @@ const toggleFavorite = async (req, res) => {
     }
 
   } catch (error) {
-    logger.error('Toggle favorite error:', error.message);
+    logger.error('Toggle favorite error:', {
+      error: error.message,
+      stack: error.stack,
+      body: req.body
+    });
+    
     res.status(500).json(
-      formatErrorResponse('Failed to toggle favorite', error.message)
+      formatErrorResponse('Failed to toggle favorite', 
+        process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      )
     );
   }
 };
@@ -105,6 +158,18 @@ const toggleFavorite = async (req, res) => {
 const clearAllFavorites = async (req, res) => {
   try {
     const { userId } = req.params;
+
+    // Verificar autenticación
+    const { rows: userRows } = await executeQuery(
+      'SELECT id FROM users WHERE id = ? AND name IS NOT NULL AND email IS NOT NULL',
+      [userId]
+    );
+
+    if (userRows.length === 0) {
+      return res.status(401).json(
+        formatErrorResponse('Authentication required')
+      );
+    }
 
     // Obtener conteo antes de eliminar
     const { rows: countRows } = await executeQuery(
@@ -134,41 +199,8 @@ const clearAllFavorites = async (req, res) => {
   }
 };
 
-// Obtener canciones favoritas por restaurante
-const getFavoritesByRestaurant = async (req, res) => {
-  try {
-    const { restaurantId } = req.params;
-    const { limit = 10 } = req.query;
-
-    const { rows } = await executeQuery(
-      `SELECT s.id, s.title, s.artist, s.album, s.image, s.genre,
-              COUNT(f.id) as favorite_count
-       FROM songs s
-       LEFT JOIN favorites f ON s.id = f.song_id
-       WHERE s.restaurant_id = ? AND s.is_active = true
-       GROUP BY s.id, s.title, s.artist, s.album, s.image, s.genre
-       HAVING favorite_count > 0
-       ORDER BY favorite_count DESC, s.popularity DESC
-       LIMIT ?`,
-      [restaurantId, parseInt(limit)]
-    );
-
-    res.json(formatSuccessResponse('Restaurant favorites retrieved', {
-      favorites: rows,
-      total: rows.length
-    }));
-
-  } catch (error) {
-    logger.error('Get restaurant favorites error:', error.message);
-    res.status(500).json(
-      formatErrorResponse('Failed to get restaurant favorites', error.message)
-    );
-  }
-};
-
 module.exports = {
   getUserFavorites,
   toggleFavorite,
-  clearAllFavorites,
-  getFavoritesByRestaurant
+  clearAllFavorites
 };

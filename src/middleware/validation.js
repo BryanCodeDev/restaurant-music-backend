@@ -1,4 +1,4 @@
-// src/middleware/validation.js - UPDATED WITH ID VALIDATION HELPERS
+// src/middleware/validation.js - UPDATED WITH FLEXIBLE ID VALIDATION
 const { validationResult } = require('express-validator');
 const { logger } = require('../utils/logger');
 
@@ -31,35 +31,55 @@ const validate = (req, res, next) => {
   next();
 };
 
-// NUEVO: Validadores de ID personalizados
+// CORREGIDO: Validador de ID de canción más flexible
 const validateSongId = (value) => {
+  if (!value) {
+    throw new Error('Song ID is required');
+  }
+
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const songIdRegex = /^song-\d{3,}$/;
+  const flexibleSongIdRegex = /^song-[a-zA-Z0-9]+$/; // Para IDs como song-024, song-abc123, etc.
   
-  if (!uuidRegex.test(value) && !songIdRegex.test(value)) {
-    throw new Error('Valid song ID is required (UUID or song-XXX format)');
+  if (uuidRegex.test(value) || songIdRegex.test(value) || flexibleSongIdRegex.test(value)) {
+    return true;
   }
-  return true;
+  
+  throw new Error('Valid song ID is required (UUID, song-XXX, or song-XXXX format)');
 };
 
+// CORREGIDO: Validador de ID de petición más flexible
 const validateRequestId = (value) => {
+  if (!value) {
+    throw new Error('Request ID is required');
+  }
+
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const requestIdRegex = /^req-\d{3,}$/;
+  const flexibleRequestIdRegex = /^req-[a-zA-Z0-9-]+$/;
   
-  if (!uuidRegex.test(value) && !requestIdRegex.test(value)) {
-    throw new Error('Valid request ID is required (UUID or req-XXX format)');
+  if (uuidRegex.test(value) || requestIdRegex.test(value) || flexibleRequestIdRegex.test(value)) {
+    return true;
   }
-  return true;
+  
+  throw new Error('Valid request ID is required (UUID or req-XXX format)');
 };
 
+// CORREGIDO: Validador de ID de usuario más flexible
 const validateUserId = (value) => {
+  if (!value) {
+    throw new Error('User ID is required');
+  }
+
   const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const userIdRegex = /^user-\d{3,}$/;
+  const flexibleUserIdRegex = /^[a-zA-Z0-9-]{8,}$/; // Para UUIDs sin guiones o formatos similares
   
-  if (!uuidRegex.test(value) && !userIdRegex.test(value)) {
-    throw new Error('Valid user ID is required (UUID or user-XXX format)');
+  if (uuidRegex.test(value) || userIdRegex.test(value) || flexibleUserIdRegex.test(value)) {
+    return true;
   }
-  return true;
+  
+  throw new Error('Valid user ID is required (UUID or user-XXX format)');
 };
 
 const validateRestaurantId = (value) => {
@@ -95,6 +115,57 @@ const existsInDB = (model, field = 'id', message) => {
   };
 };
 
+// MEJORADO: Validador de canción que verifica existencia en restaurante
+const validateSongExistsInRestaurant = (restaurantSlug) => {
+  return async (songId) => {
+    const { executeQuery } = require('../config/database');
+    
+    try {
+      // Validar formato del songId primero (usando el validador más flexible)
+      validateSongId(songId);
+      
+      // Verificar que la canción existe en el restaurante
+      const { rows } = await executeQuery(
+        `SELECT s.id FROM songs s 
+         JOIN restaurants r ON s.restaurant_id = r.id 
+         WHERE s.id = ? AND r.slug = ? AND s.is_active = 1 AND r.is_active = 1
+         LIMIT 1`,
+        [songId, restaurantSlug]
+      );
+      
+      if (rows.length === 0) {
+        throw new Error('Song not found in this restaurant or inactive');
+      }
+      
+      return true;
+    } catch (error) {
+      logger.error('Song-Restaurant validation error:', { songId, restaurantSlug, error: error.message });
+      throw new Error(error.message);
+    }
+  };
+};
+
+// Validador para restaurante activo
+const activeRestaurant = async (slug) => {
+  const { executeQuery } = require('../config/database');
+  
+  try {
+    const { rows } = await executeQuery(
+      'SELECT id FROM restaurants WHERE slug = ? AND is_active = true',
+      [slug]
+    );
+    
+    if (rows.length === 0) {
+      throw new Error('Restaurant not found or inactive');
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error('Restaurant validation error:', error);
+    throw new Error(error.message);
+  }
+};
+
 // Validador personalizado para verificar unicidad en la base de datos
 const uniqueInDB = (model, field, message, excludeId = null) => {
   return async (value, { req }) => {
@@ -124,57 +195,6 @@ const uniqueInDB = (model, field, message, excludeId = null) => {
   };
 };
 
-// Validador para restaurante activo
-const activeRestaurant = async (slug) => {
-  const { executeQuery } = require('../config/database');
-  
-  try {
-    const { rows } = await executeQuery(
-      'SELECT id FROM restaurants WHERE slug = ? AND is_active = true',
-      [slug]
-    );
-    
-    if (rows.length === 0) {
-      throw new Error('Restaurant not found or inactive');
-    }
-    
-    return true;
-  } catch (error) {
-    logger.error('Restaurant validation error:', error);
-    throw new Error(error.message);
-  }
-};
-
-// MEJORADO: Validador de canción que verifica existencia en restaurante
-const validateSongExistsInRestaurant = (restaurantSlug) => {
-  return async (songId) => {
-    const { executeQuery } = require('../config/database');
-    
-    try {
-      // Validar formato del songId primero
-      validateSongId(songId);
-      
-      // Verificar que la canción existe en el restaurante
-      const { rows } = await executeQuery(
-        `SELECT s.id FROM songs s 
-         JOIN restaurants r ON s.restaurant_id = r.id 
-         WHERE s.id = ? AND r.slug = ? AND s.is_active = 1 AND r.is_active = 1
-         LIMIT 1`,
-        [songId, restaurantSlug]
-      );
-      
-      if (rows.length === 0) {
-        throw new Error('Song not found in this restaurant or inactive');
-      }
-      
-      return true;
-    } catch (error) {
-      logger.error('Song-Restaurant validation error:', { songId, restaurantSlug, error: error.message });
-      throw new Error(error.message);
-    }
-  };
-};
-
 // Sanitizar entrada de texto
 const sanitizeText = (text, maxLength = 255) => {
   if (!text) return '';
@@ -197,7 +217,7 @@ const validateDuration = (value) => {
   return true;
 };
 
-// MEJORADO: Validador de género musical con soporte para la base de datos
+// Validador de género musical
 const validateGenre = (value) => {
   const allowedGenres = [
     'rock', 'pop', 'electronic', 'hip-hop', 'hiphop', 'jazz', 'reggaeton',
@@ -212,22 +232,10 @@ const validateGenre = (value) => {
   
   const normalizedValue = value.toString().toLowerCase().trim();
   
-  const genreMapping = {
-    'hip hop': 'hip-hop',
-    'hiphop': 'hip-hop',
-    'r and b': 'r&b',
-    'rnb': 'r&b',
-    'drum and bass': 'drum-and-bass',
-    'dnb': 'drum-and-bass'
-  };
-  
-  const mappedGenre = genreMapping[normalizedValue] || normalizedValue;
-  
-  if (!allowedGenres.includes(mappedGenre)) {
+  if (!allowedGenres.includes(normalizedValue)) {
     logger.warn('Invalid genre attempted:', {
       original: value,
-      normalized: normalizedValue,
-      mapped: mappedGenre
+      normalized: normalizedValue
     });
     throw new Error(`Invalid music genre: ${value}. Please use a valid genre.`);
   }
@@ -290,7 +298,7 @@ const validateOptionalQueryParams = (allowedParams = []) => {
 
 module.exports = {
   validate,
-  // ID Validators
+  // ID Validators - CORREGIDOS
   validateSongId,
   validateRequestId,
   validateUserId,

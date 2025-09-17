@@ -1,4 +1,4 @@
-// src/controllers/restaurantController.js
+// src/controllers/restaurantController.js - UPDATED WITH getPublicRestaurants
 const { executeQuery } = require('../config/database');
 const { regenerateQRCode } = require('../services/qrService');
 const { logger } = require('../utils/logger');
@@ -269,6 +269,182 @@ const updateRestaurantSettings = async (req, res) => {
   }
 };
 
+// MISSING FUNCTION - Obtener todos los restaurantes públicos (para el selector)
+const getPublicRestaurants = async (req, res) => {
+  try {
+    const { 
+      page = 1, 
+      limit = 20, 
+      search, 
+      isActive, 
+      city
+    } = req.query;
+
+    logger.info('Getting public restaurants:', { page, limit, search, isActive, city });
+
+    // Construir condiciones de búsqueda
+    let whereConditions = ['1=1']; // Condición base
+    let queryParams = [];
+    
+    // Filtro por búsqueda de texto
+    if (search && search.trim()) {
+      whereConditions.push('(name LIKE ? OR address LIKE ? OR city LIKE ?)');
+      const searchTerm = `%${search.trim()}%`;
+      queryParams.push(searchTerm, searchTerm, searchTerm);
+    }
+
+    // Filtro por estado activo (por defecto solo mostrar activos)
+    if (isActive !== undefined) {
+      whereConditions.push('is_active = ?');
+      queryParams.push(isActive === 'true' ? 1 : 0);
+    } else {
+      // Por defecto, solo mostrar restaurantes activos
+      whereConditions.push('is_active = true');
+    }
+
+    // Filtro por ciudad
+    if (city && city.trim()) {
+      whereConditions.push('city LIKE ?');
+      queryParams.push(`%${city.trim()}%`);
+    }
+
+    // Construir query principal
+    const whereClause = whereConditions.join(' AND ');
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // Consultar restaurantes con información adicional
+    const { rows: restaurants } = await executeQuery(
+      `SELECT 
+        id, name, slug, email, phone, address, city, country,
+        is_active, created_at, updated_at
+      FROM restaurants 
+      WHERE ${whereClause}
+      ORDER BY is_active DESC, name ASC
+      LIMIT ? OFFSET ?`,
+      [...queryParams, parseInt(limit), offset]
+    );
+
+    // Obtener el conteo total
+    const { rows: countRows } = await executeQuery(
+      `SELECT COUNT(*) as total FROM restaurants WHERE ${whereClause}`,
+      queryParams
+    );
+
+    const totalCount = countRows[0]?.total || 0;
+
+    logger.info(`Found ${totalCount} restaurants, returning ${restaurants.length}`);
+
+    // Enriquecer datos de cada restaurante
+    const enrichedRestaurants = await Promise.all(
+      restaurants.map(async (restaurant) => {
+        try {
+          // Obtener estadísticas adicionales del restaurante
+          const { rows: statsRows } = await executeQuery(
+            `SELECT 
+              (SELECT COUNT(*) FROM songs WHERE restaurant_id = ? AND is_active = true) as total_songs,
+              (SELECT COUNT(*) FROM requests WHERE restaurant_id = ? AND status = 'pending') as queue_length,
+              (SELECT COUNT(DISTINCT user_id) FROM requests WHERE restaurant_id = ? AND DATE(created_at) = CURDATE()) as active_customers
+            `,
+            [restaurant.id, restaurant.id, restaurant.id]
+          );
+
+          const stats = statsRows[0] || {};
+
+          // Obtener canción actual (la que está sonando o la más reciente completada)
+          const { rows: currentSongRows } = await executeQuery(
+            `SELECT s.title, s.artist, r.status, r.created_at
+             FROM requests r
+             JOIN songs s ON r.song_id = s.id
+             WHERE r.restaurant_id = ? AND r.status IN ('playing', 'completed')
+             ORDER BY 
+               CASE WHEN r.status = 'playing' THEN 1 ELSE 2 END,
+               r.updated_at DESC
+             LIMIT 1`,
+            [restaurant.id]
+          );
+
+          const currentSong = currentSongRows[0];
+
+          return {
+            id: restaurant.id,
+            name: restaurant.name,
+            slug: restaurant.slug,
+            email: restaurant.email,
+            phone: restaurant.phone,
+            address: restaurant.address,
+            city: restaurant.city,
+            country: restaurant.country,
+            isActive: restaurant.is_active,
+            
+            // Datos enriquecidos
+            totalSongs: stats.total_songs || 0,
+            queueLength: stats.queue_length || 0,
+            activeCustomers: stats.active_customers || 0,
+            
+            // Canción actual
+            currentSong: currentSong ? `${currentSong.title} - ${currentSong.artist}` : null,
+            currentArtist: currentSong?.artist || null,
+            
+            // Datos por defecto para UI
+            rating: 4.5, // Por ahora fijo, después puedes implementar sistema de ratings
+            reviewCount: Math.floor(Math.random() * 200) + 50, // Temporal
+            coverImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=400&fit=crop&crop=center',
+            logo: null,
+            genres: ['Música Variada'], // Por ahora fijo, después basado en canciones
+            priceRange: '$',
+            musicStyle: 'Variado',
+            hours: restaurant.is_active ? 'Abierto ahora' : 'Cerrado',
+            capacity: 50, // Por ahora fijo
+            ambiance: 'Musical', // Por ahora fijo
+            
+            // Metadatos
+            createdAt: restaurant.created_at,
+            updatedAt: restaurant.updated_at
+          };
+        } catch (err) {
+          logger.warn(`Error enriching restaurant ${restaurant.id}:`, err);
+          // Retornar datos básicos si hay error
+          return {
+            ...restaurant,
+            totalSongs: 0,
+            queueLength: 0,
+            activeCustomers: 0,
+            currentSong: null,
+            rating: 4.5,
+            reviewCount: 0,
+            coverImage: 'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=800&h=400&fit=crop&crop=center',
+            genres: ['Música Variada'],
+            hours: restaurant.is_active ? 'Abierto ahora' : 'Cerrado'
+          };
+        }
+      })
+    );
+
+    // Calcular metadatos de paginación
+    const totalPages = Math.ceil(totalCount / parseInt(limit));
+    const hasNextPage = parseInt(page) < totalPages;
+    const hasPreviousPage = parseInt(page) > 1;
+
+    res.status(200).json(formatSuccessResponse(`Found ${totalCount} restaurants`, {
+      restaurants: enrichedRestaurants,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages,
+        totalCount,
+        hasNextPage,
+        hasPreviousPage,
+        limit: parseInt(limit)
+      }
+    }));
+
+  } catch (error) {
+    logger.error('Error fetching public restaurants:', error);
+    res.status(500).json(
+      formatErrorResponse('Error al obtener restaurantes', error.message)
+    );
+  }
+};
+
 // Regenerar código QR
 const regenerateQR = async (req, res) => {
   try {
@@ -315,5 +491,6 @@ module.exports = {
   getRestaurantStats,
   getRestaurantSettings,
   updateRestaurantSettings,
+  getPublicRestaurants,  // NOW EXPORTED
   regenerateQR
 };

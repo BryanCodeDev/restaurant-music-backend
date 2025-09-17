@@ -1,236 +1,185 @@
-// src/utils/helpers.js
+// src/utils/helpers.js - Utility functions for API responses
+const crypto = require('crypto');
 
-// Crear slug desde un string
+// Format success response
+const formatSuccessResponse = (message, data = null, meta = null) => {
+  const response = {
+    success: true,
+    message,
+    timestamp: new Date().toISOString()
+  };
+
+  if (data !== null) {
+    response.data = data;
+  }
+
+  if (meta !== null) {
+    response.meta = meta;
+  }
+
+  return response;
+};
+
+// Format error response
+const formatErrorResponse = (message, details = null, errors = null) => {
+  const response = {
+    success: false,
+    message,
+    timestamp: new Date().toISOString()
+  };
+
+  if (details !== null) {
+    response.details = details;
+  }
+
+  if (errors !== null) {
+    response.errors = errors;
+  }
+
+  return response;
+};
+
+// Create slug from text
 const createSlug = (text) => {
-  if (!text) return '';
-  
   return text
     .toString()
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, '-')           // Reemplazar espacios con guiones
-    .replace(/[^\w\-]+/g, '')       // Remover caracteres especiales
-    .replace(/\-\-+/g, '-')         // Reemplazar múltiples guiones con uno
-    .replace(/^-+/, '')             // Remover guiones al inicio
-    .replace(/-+$/, '');            // Remover guiones al final
+    .replace(/\s+/g, '-')           // Replace spaces with -
+    .replace(/[^\w\-]+/g, '')       // Remove all non-word chars
+    .replace(/\-\-+/g, '-')         // Replace multiple - with single -
+    .replace(/^-+/, '')             // Trim - from start of text
+    .replace(/-+$/, '');            // Trim - from end of text
 };
 
-// Generar ID único
-const generateId = () => {
-  return Math.random().toString(36).substr(2, 9);
+// Generate random ID
+const generateId = (prefix = '', length = 8) => {
+  const randomBytes = crypto.randomBytes(Math.ceil(length / 2));
+  const randomString = randomBytes.toString('hex').slice(0, length);
+  return prefix ? `${prefix}-${randomString}` : randomString;
 };
 
-// Validar email
+// Generate UUID v4
+const generateUUID = () => {
+  return crypto.randomUUID();
+};
+
+// Sanitize input text
+const sanitizeText = (text, maxLength = 255) => {
+  if (!text) return '';
+  
+  return text
+    .toString()
+    .trim()
+    .substring(0, maxLength)
+    .replace(/[<>]/g, ''); // Remove dangerous characters
+};
+
+// Validate email format
 const isValidEmail = (email) => {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
 };
 
-// Formatear duración de segundos a mm:ss
+// Validate phone number format
+const isValidPhone = (phone) => {
+  const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
+  return phoneRegex.test(phone);
+};
+
+// Format duration from seconds to mm:ss
 const formatDuration = (seconds) => {
-  if (!seconds || seconds < 0) return '0:00';
-  
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
-  
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
 
-// Convertir duración mm:ss a segundos
-const durationToSeconds = (duration) => {
-  if (!duration) return 0;
-  
-  const [minutes, seconds] = duration.split(':').map(Number);
-  return (minutes * 60) + seconds;
+// Parse duration from mm:ss to seconds
+const parseDuration = (duration) => {
+  const parts = duration.split(':');
+  return parseInt(parts[0]) * 60 + parseInt(parts[1]);
 };
 
-// Limpiar texto de caracteres peligrosos
-const sanitizeString = (str, maxLength = 255) => {
-  if (!str) return '';
-  
+// Capitalize first letter of each word
+const titleCase = (str) => {
   return str
-    .toString()
-    .trim()
-    .substring(0, maxLength)
-    .replace(/[<>'"]/g, '');
+    .toLowerCase()
+    .split(' ')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
 };
 
-// Generar código aleatorio
-const generateCode = (length = 6) => {
-  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  let result = '';
-  
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  
-  return result;
+// Deep clone object
+const deepClone = (obj) => {
+  return JSON.parse(JSON.stringify(obj));
 };
 
-// Validar formato de teléfono colombiano
-const isValidColombianPhone = (phone) => {
-  const phoneRegex = /^(\+57)?[0-9]{10}$/;
-  return phoneRegex.test(phone.replace(/\s/g, ''));
+// Check if object is empty
+const isEmpty = (obj) => {
+  return Object.keys(obj).length === 0;
 };
 
-// Formatear respuesta de error estándar
-const formatErrorResponse = (message, details = null, code = null) => {
-  return {
-    success: false,
-    message,
-    ...(details && { details }),
-    ...(code && { code }),
-    timestamp: new Date().toISOString()
-  };
-};
-
-// Formatear respuesta de éxito estándar
-const formatSuccessResponse = (message, data = null) => {
-  return {
-    success: true,
-    message,
-    ...(data && { data }),
-    timestamp: new Date().toISOString()
-  };
-};
-
-// Paginar resultados
-const paginate = (page = 1, limit = 10) => {
-  const pageNum = Math.max(1, parseInt(page) || 1);
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10));
-  const offset = (pageNum - 1) * limitNum;
-  
-  return {
-    page: pageNum,
-    limit: limitNum,
-    offset
-  };
-};
-
-// Calcular datos de paginación
-const calculatePagination = (total, page, limit) => {
-  const totalPages = Math.ceil(total / limit);
-  
-  return {
-    total,
-    page,
-    limit,
-    totalPages,
-    hasNext: page < totalPages,
-    hasPrev: page > 1
-  };
-};
-
-// Debounce función
-const debounce = (func, wait) => {
-  let timeout;
-  
-  return function executedFunction(...args) {
-    const later = () => {
-      clearTimeout(timeout);
-      func(...args);
-    };
-    
-    clearTimeout(timeout);
-    timeout = setTimeout(later, wait);
-  };
-};
-
-// Generar token de reset de password
-const generateResetToken = () => {
-  return require('crypto').randomBytes(32).toString('hex');
-};
-
-// Validar fuerza de contraseña
-const validatePasswordStrength = (password) => {
-  const minLength = 8;
-  const hasUpperCase = /[A-Z]/.test(password);
-  const hasLowerCase = /[a-z]/.test(password);
-  const hasNumbers = /\d/.test(password);
-  const hasSpecialChar = /[!@#$%^&*(),.?":{}|<>]/.test(password);
-  
-  const score = [
-    password.length >= minLength,
-    hasUpperCase,
-    hasLowerCase,
-    hasNumbers,
-    hasSpecialChar
-  ].filter(Boolean).length;
-  
-  return {
-    isValid: score >= 4,
-    score,
-    feedback: {
-      length: password.length >= minLength,
-      upperCase: hasUpperCase,
-      lowerCase: hasLowerCase,
-      numbers: hasNumbers,
-      specialChar: hasSpecialChar
+// Remove undefined/null values from object
+const cleanObject = (obj) => {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined && value !== null && value !== '') {
+      cleaned[key] = value;
     }
-  };
-};
-
-// Convertir string a boolean
-const stringToBoolean = (str) => {
-  if (typeof str === 'boolean') return str;
-  if (typeof str === 'string') {
-    return str.toLowerCase() === 'true' || str === '1';
   }
-  return false;
+  return cleaned;
 };
 
-// Obtener IP real del cliente
-const getClientIP = (req) => {
-  return req.ip ||
-         req.connection.remoteAddress ||
-         req.socket.remoteAddress ||
-         (req.connection.socket ? req.connection.socket.remoteAddress : null) ||
-         '127.0.0.1';
+// Generate random number between min and max
+const randomBetween = (min, max) => {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 };
 
-// Generar nombre de mesa aleatorio
-const generateTableName = () => {
-  const adjectives = ['Rápida', 'Feliz', 'Brillante', 'Cómoda', 'Especial', 'Única'];
-  const nouns = ['Mesa', 'Estación', 'Zona', 'Punto', 'Lugar', 'Sitio'];
+// Format file size in bytes to human readable
+const formatFileSize = (bytes) => {
+  if (bytes === 0) return '0 Bytes';
   
-  const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
-  const noun = nouns[Math.floor(Math.random() * nouns.length)];
-  const number = Math.floor(Math.random() * 50) + 1;
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
   
-  return `${adjective} ${noun} #${number}`;
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 };
 
-// Validar coordenadas geográficas
-const isValidCoordinates = (lat, lng) => {
-  const latitude = parseFloat(lat);
-  const longitude = parseFloat(lng);
-  
-  return !isNaN(latitude) && 
-         !isNaN(longitude) &&
-         latitude >= -90 && 
-         latitude <= 90 &&
-         longitude >= -180 && 
-         longitude <= 180;
+// Wait for specified milliseconds
+const sleep = (ms) => {
+  return new Promise(resolve => setTimeout(resolve, ms));
+};
+
+// Retry function with exponential backoff
+const retry = async (fn, maxRetries = 3, delay = 1000) => {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (i === maxRetries - 1) throw error;
+      await sleep(delay * Math.pow(2, i)); // Exponential backoff
+    }
+  }
 };
 
 module.exports = {
+  formatSuccessResponse,
+  formatErrorResponse,
   createSlug,
   generateId,
+  generateUUID,
+  sanitizeText,
   isValidEmail,
+  isValidPhone,
   formatDuration,
-  durationToSeconds,
-  sanitizeString,
-  generateCode,
-  isValidColombianPhone,
-  formatErrorResponse,
-  formatSuccessResponse,
-  paginate,
-  calculatePagination,
-  debounce,
-  generateResetToken,
-  validatePasswordStrength,
-  stringToBoolean,
-  getClientIP,
-  generateTableName,
-  isValidCoordinates
+  parseDuration,
+  titleCase,
+  deepClone,
+  isEmpty,
+  cleanObject,
+  randomBetween,
+  formatFileSize,
+  sleep,
+  retry
 };

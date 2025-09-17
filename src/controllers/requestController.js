@@ -1,4 +1,4 @@
-// src/controllers/requestController.js
+// src/controllers/requestController.js - COMPLETE FIXED VERSION
 const { v4: uuidv4 } = require('uuid');
 const { executeQuery, executeTransaction } = require('../config/database');
 const { logger } = require('../utils/logger');
@@ -290,17 +290,26 @@ const getRestaurantQueue = async (req, res) => {
   }
 };
 
-// Cancelar una petición
+// CORREGIDO: Función cancelRequest con mejor manejo de errores
 const cancelRequest = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { tableNumber } = req.body;
+    const { tableNumber } = req.body || {};
     const ipAddress = req.ip;
 
-    // Buscar la petición
+    // Validar que requestId esté presente
+    if (!requestId) {
+      return res.status(400).json(
+        formatErrorResponse('Request ID is required')
+      );
+    }
+
+    logger.info(`Attempting to cancel request: ${requestId}`);
+
+    // Buscar la petición con información completa
     const { rows: requestRows } = await executeQuery(
       `SELECT r.id, r.status, r.user_id, r.queue_position, r.restaurant_id,
-              s.title, s.artist, u.table_number, u.ip_address
+              s.title, s.artist, u.table_number, u.ip_address, u.id as user_table_id
        FROM requests r
        JOIN songs s ON r.song_id = s.id
        JOIN users u ON r.user_id = u.id
@@ -309,66 +318,147 @@ const cancelRequest = async (req, res) => {
     );
 
     if (requestRows.length === 0) {
+      logger.warn(`Request not found: ${requestId}`);
       return res.status(404).json(
         formatErrorResponse('Request not found')
       );
     }
 
     const request = requestRows[0];
+    logger.info(`Found request:`, { 
+      id: request.id, 
+      status: request.status, 
+      table: request.table_number,
+      userIp: request.ip_address 
+    });
 
-    // Verificar autorización (por mesa o IP)
-    const canCancel = (tableNumber && request.table_number === tableNumber) || 
-                     request.ip_address === ipAddress;
+    // Verificar autorización de manera más flexible
+    let canCancel = false;
+    
+    // Si el usuario está autenticado y es del restaurante
+    if (req.user && req.user.type === 'restaurant' && req.user.id === request.restaurant_id) {
+      canCancel = true;
+      logger.info('Authorization: Restaurant owner');
+    }
+    // Si coincide la mesa
+    else if (tableNumber && request.table_number === tableNumber) {
+      canCancel = true;
+      logger.info('Authorization: Table number match');
+    }
+    // Si coincide la IP (usuario sin mesa específica)
+    else if (request.ip_address === ipAddress) {
+      canCancel = true;
+      logger.info('Authorization: IP address match');
+    }
+    // Si no hay tableNumber en el body, permitir cancelar por IP
+    else if (!tableNumber && request.ip_address === ipAddress) {
+      canCancel = true;
+      logger.info('Authorization: IP address match (no table specified)');
+    }
 
     if (!canCancel) {
+      logger.warn('Cancellation not authorized:', {
+        requestId,
+        providedTable: tableNumber,
+        actualTable: request.table_number,
+        clientIp: ipAddress,
+        requestIp: request.ip_address
+      });
+      
       return res.status(403).json(
         formatErrorResponse('Not authorized to cancel this request')
       );
     }
 
-    // No se puede cancelar si ya está reproduciendo o completada
+    // Verificar que se pueda cancelar según el estado
+    if (request.status === 'completed') {
+      return res.status(400).json(
+        formatErrorResponse('Cannot cancel a completed request')
+      );
+    }
+
+    if (request.status === 'cancelled') {
+      return res.status(400).json(
+        formatErrorResponse('Request is already cancelled')
+      );
+    }
+
+    // Si está reproduciendo, permitir cancelar pero con advertencia
     if (request.status === 'playing') {
-      return res.status(400).json(
-        formatErrorResponse('Cannot cancel a request that is currently playing')
-      );
+      logger.warn(`Cancelling currently playing request: ${requestId}`);
     }
 
-    if (request.status === 'completed' || request.status === 'cancelled') {
-      return res.status(400).json(
-        formatErrorResponse('Request is already completed or cancelled')
-      );
+    try {
+      // Cancelar usando transacción para actualizar posiciones de cola
+      const transactionQueries = [
+        {
+          query: 'UPDATE requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          params: ['cancelled', requestId]
+        }
+      ];
+
+      // Solo actualizar posiciones si estaba pendiente
+      if (request.status === 'pending' && request.queue_position) {
+        transactionQueries.push({
+          query: `UPDATE requests 
+                  SET queue_position = queue_position - 1, updated_at = CURRENT_TIMESTAMP 
+                  WHERE restaurant_id = ? AND status = 'pending' AND queue_position > ?`,
+          params: [request.restaurant_id, request.queue_position]
+        });
+      }
+
+      await executeTransaction(transactionQueries);
+
+      logger.info(`Request cancelled successfully: ${request.title} by ${request.artist} from table ${request.table_number}`);
+
+      res.json(formatSuccessResponse('Request cancelled successfully', {
+        requestId: request.id,
+        song: {
+          title: request.title,
+          artist: request.artist
+        },
+        previousStatus: request.status,
+        tableNumber: request.table_number
+      }));
+
+    } catch (transactionError) {
+      logger.error('Transaction error during cancellation:', transactionError);
+      
+      // Intentar cancelación simple sin transacción
+      try {
+        await executeQuery(
+          'UPDATE requests SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          ['cancelled', requestId]
+        );
+
+        logger.info(`Request cancelled (simple update): ${requestId}`);
+
+        res.json(formatSuccessResponse('Request cancelled successfully', {
+          requestId: request.id,
+          song: {
+            title: request.title,
+            artist: request.artist
+          },
+          note: 'Queue positions may need manual adjustment'
+        }));
+
+      } catch (simpleUpdateError) {
+        logger.error('Simple update also failed:', simpleUpdateError);
+        throw simpleUpdateError;
+      }
     }
-
-    // Cancelar usando transacción para actualizar posiciones de cola
-    const transactionQueries = [
-      {
-        query: 'UPDATE requests SET status = "cancelled" WHERE id = ?',
-        params: [requestId]
-      },
-      {
-        query: `UPDATE requests 
-                SET queue_position = queue_position - 1 
-                WHERE restaurant_id = ? AND status = "pending" AND queue_position > ?`,
-        params: [request.restaurant_id, request.queue_position]
-      }
-    ];
-
-    await executeTransaction(transactionQueries);
-
-    logger.info(`Request cancelled: ${request.title} by ${request.artist} from table ${request.table_number}`);
-
-    res.json(formatSuccessResponse('Request cancelled successfully', {
-      requestId: request.id,
-      song: {
-        title: request.title,
-        artist: request.artist
-      }
-    }));
 
   } catch (error) {
-    logger.error('Cancel request error:', error.message);
+    logger.error('Cancel request error:', {
+      error: error.message,
+      stack: error.stack,
+      requestId: req.params.requestId,
+      body: req.body,
+      ip: req.ip
+    });
+
     res.status(500).json(
-      formatErrorResponse('Failed to cancel request', error.message)
+      formatErrorResponse('Failed to cancel request', process.env.NODE_ENV === 'development' ? error.message : undefined)
     );
   }
 };
