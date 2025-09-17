@@ -122,40 +122,52 @@ class Song {
     }
   }
 
-  // Búsqueda de texto completo
+  // Búsqueda de texto completo optimizada con FULLTEXT prioritario
   static async search(restaurantId, query, filters = {}) {
     try {
       let searchQuery = `
-        SELECT *, 
+        SELECT *,
         MATCH(title, artist, album) AGAINST(? IN NATURAL LANGUAGE MODE) as relevance
-        FROM songs 
+        FROM songs
         WHERE restaurant_id = ? AND is_active = true
-        AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)
+        HAVING relevance > 0
+        ORDER BY relevance DESC, popularity DESC, times_requested DESC
       `;
       
-      const searchTerm = `%${query}%`;
-      let params = [query, restaurantId, searchTerm, searchTerm, searchTerm];
+      let params = [query, restaurantId];
 
       // Filtros adicionales
       if (filters.genre && filters.genre !== 'all') {
-        searchQuery += ' AND genre = ?';
-        params.push(filters.genre);
+        searchQuery = searchQuery.replace('WHERE restaurant_id = ? AND is_active = true', 'WHERE restaurant_id = ? AND is_active = true AND genre = ?');
+        params.splice(1, 0, filters.genre);
       }
 
       if (filters.year) {
-        searchQuery += ' AND year = ?';
-        params.push(filters.year);
+        searchQuery = searchQuery.replace('WHERE restaurant_id = ? AND is_active = true', 'WHERE restaurant_id = ? AND is_active = true AND year = ?');
+        params.splice(1, 0, filters.year);
       }
-
-      searchQuery += ' ORDER BY relevance DESC, popularity DESC';
 
       if (filters.limit) {
         searchQuery += ' LIMIT ?';
         params.push(parseInt(filters.limit));
       }
 
-      const { rows } = await executeQuery(searchQuery, params);
-      return rows.map(row => new Song(row));
+      // Fallback si no hay resultados con FULLTEXT
+      let results = await executeQuery(searchQuery, params);
+      if (results.rows.length === 0 && query) {
+        const fallbackQuery = `
+          SELECT *, 0 as relevance
+          FROM songs
+          WHERE restaurant_id = ? AND is_active = true
+          AND (title LIKE ? OR artist LIKE ? OR album LIKE ?)
+          ORDER BY popularity DESC, times_requested DESC
+        `;
+        const searchTerm = `%${query}%`;
+        const fallbackResults = await executeQuery(fallbackQuery, [restaurantId, searchTerm, searchTerm, searchTerm]);
+        results = { rows: fallbackResults.rows };
+      }
+
+      return results.rows.map(row => new Song(row));
     } catch (error) {
       throw new Error(`Error searching songs: ${error.message}`);
     }
@@ -341,7 +353,7 @@ class Song {
     }
   }
 
-  // Serializar para JSON
+  // Serializar para JSON - Incluyendo todos los campos
   toJSON() {
     return {
       id: this.id,
@@ -362,7 +374,8 @@ class Song {
       timesRequested: this.timesRequested,
       durationInSeconds: this.getDurationInSeconds(),
       createdAt: this.createdAt,
-      updatedAt: this.updatedAt
+      updatedAt: this.updatedAt,
+      relevance: null // Para search results
     };
   }
 }

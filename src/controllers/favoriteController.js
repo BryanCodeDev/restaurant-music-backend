@@ -1,40 +1,47 @@
-// src/controllers/favoriteController.js - SIMPLIFICADO PARA USUARIOS AUTENTICADOS SOLAMENTE
+// src/controllers/favoriteController.js - ACTUALIZADO PARA NUEVO ESQUEMA CON FAVORITE MODEL
 const { v4: uuidv4 } = require('uuid');
-const { executeQuery } = require('../config/database');
 const { logger } = require('../utils/logger');
 const { formatSuccessResponse, formatErrorResponse } = require('../utils/helpers');
+const Favorite = require('../models/Favorite');
+const { User, RegisteredUser } = require('../models/User');
+const Song = require('../models/Song');
 
-// Obtener favoritos de un usuario autenticado
+// Obtener favoritos de un usuario (temporal o registrado)
 const getUserFavorites = async (req, res) => {
   try {
     const { userId } = req.params;
+    const userType = req.user.type; // 'user' for temporary, 'registered_user' for permanent
 
-    // Verificar que el usuario existe y está autenticado (no es sesión temporal)
-    const { rows: userRows } = await executeQuery(
-      'SELECT id FROM users WHERE id = ? AND name IS NOT NULL AND email IS NOT NULL',
-      [userId]
-    );
+    let favorites = [];
+    let total = 0;
 
-    if (userRows.length === 0) {
-      return res.status(404).json(
-        formatErrorResponse('User not found or not authenticated')
+    if (userType === 'registered_user') {
+      const regUser = await RegisteredUser.findById(userId);
+      if (!regUser) {
+        return res.status(404).json(
+          formatErrorResponse('Registered user not found')
+        );
+      }
+      favorites = await Favorite.getByRegisteredUser(userId);
+      total = favorites.length;
+    } else if (userType === 'user') {
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json(
+          formatErrorResponse('User session not found')
+        );
+      }
+      favorites = await Favorite.getByUser(userId, req.user.restaurantId);
+      total = favorites.length;
+    } else {
+      return res.status(401).json(
+        formatErrorResponse('Invalid user type')
       );
     }
 
-    const { rows } = await executeQuery(
-      `SELECT f.id, f.created_at,
-              s.id as song_id, s.title, s.artist, s.album, s.duration, 
-              s.genre, s.image, s.year, s.popularity
-       FROM favorites f
-       JOIN songs s ON f.song_id = s.id
-       WHERE f.user_id = ? AND s.is_active = true
-       ORDER BY f.created_at DESC`,
-      [userId]
-    );
-
     res.json(formatSuccessResponse('Favorites retrieved', {
-      favorites: rows,
-      total: rows.length
+      favorites: favorites.map(fav => fav.toJSON()),
+      total
     }));
 
   } catch (error) {
@@ -45,97 +52,84 @@ const getUserFavorites = async (req, res) => {
   }
 };
 
-// Toggle favorito - SOLO PARA USUARIOS AUTENTICADOS
+// Toggle favorito - Soporte para temporales y registrados
 const toggleFavorite = async (req, res) => {
   try {
-    const { userId, songId } = req.body;
+    const { songId } = req.body;
+    const userId = req.user.id;
+    const userType = req.user.type; // 'user' or 'registered_user'
+    const restaurantId = req.user.restaurantId || null;
 
     logger.info('Toggle favorite request received:', {
       userId,
       songId,
+      userType,
       ip: req.ip
     });
 
-    // Validar parámetros requeridos
-    if (!userId || !songId) {
+    // Validar parámetros
+    if (!songId) {
       return res.status(400).json(
-        formatErrorResponse('User ID and Song ID are required')
+        formatErrorResponse('Song ID is required')
       );
     }
 
-    // NUEVO: Verificar que el usuario está REALMENTE autenticado (no es sesión temporal)
-    const { rows: userRows } = await executeQuery(
-      'SELECT id, restaurant_id FROM users WHERE id = ? AND name IS NOT NULL AND email IS NOT NULL',
-      [userId]
-    );
-
-    if (userRows.length === 0) {
-      logger.warn('Unauthorized favorite attempt - user not authenticated:', userId);
-      return res.status(401).json(
-        formatErrorResponse('Authentication required', 'Para guardar favoritos necesitas crear una cuenta e iniciar sesión')
-      );
-    }
-
-    const user = userRows[0];
-
-    // Verificar que la canción existe
-    const { rows: songRows } = await executeQuery(
-      'SELECT id, restaurant_id, title, artist FROM songs WHERE id = ? AND is_active = true',
-      [songId]
-    );
-
-    if (songRows.length === 0) {
+    let song;
+    try {
+      song = await Song.findById(songId);
+      if (!song || !song.isActive) {
+        return res.status(404).json(
+          formatErrorResponse('Song not found or inactive')
+        );
+      }
+    } catch (error) {
       return res.status(404).json(
-        formatErrorResponse('Song not found or inactive')
+        formatErrorResponse('Song not found')
       );
     }
 
-    const song = songRows[0];
+    let favoriteType = userType === 'registered_user' ? 'permanent' : 'session';
+    let existingFavorite = null;
 
-    // Verificar si ya existe el favorito
-    const { rows: existingRows } = await executeQuery(
-      'SELECT id FROM favorites WHERE user_id = ? AND song_id = ?',
-      [userId, songId]
-    );
+    if (userType === 'registered_user') {
+      existingFavorite = await Favorite.findByIdByRegisteredUserAndSong(userId, songId);
+    } else {
+      existingFavorite = await Favorite.findByIdByUserAndSong(userId, songId);
+    }
 
-    if (existingRows.length > 0) {
-      // Eliminar favorito
-      await executeQuery(
-        'DELETE FROM favorites WHERE user_id = ? AND song_id = ?',
-        [userId, songId]
-      );
+    if (existingFavorite) {
+      // Eliminar
+      if (userType === 'registered_user') {
+        await Favorite.deleteByRegisteredUserAndSong(userId, songId);
+      } else {
+        await Favorite.deleteByUserAndSong(userId, songId);
+      }
 
-      logger.info(`Favorite removed: ${song.title} by ${song.artist}`);
+      logger.info(`Favorite removed: ${song.title} by ${song.artist} (${favoriteType})`);
 
       res.json(formatSuccessResponse('Removed from favorites', {
         added: false,
-        favoriteId: existingRows[0].id,
-        song: {
-          id: song.id,
-          title: song.title,
-          artist: song.artist
-        }
+        favoriteId: existingFavorite.id,
+        song: song.toJSON()
       }));
 
     } else {
-      // Agregar favorito
-      const favoriteId = uuidv4();
-      
-      await executeQuery(
-        'INSERT INTO favorites (id, user_id, song_id, restaurant_id) VALUES (?, ?, ?, ?)',
-        [favoriteId, userId, songId, song.restaurant_id]
-      );
+      // Agregar
+      const favorite = await Favorite.create({
+        userId: userType === 'user' ? userId : null,
+        registeredUserId: userType === 'registered_user' ? userId : null,
+        songId,
+        restaurantId: song.restaurantId,
+        favoriteType,
+        notes: null
+      });
 
-      logger.info(`Favorite added: ${song.title} by ${song.artist}`);
+      logger.info(`Favorite added: ${song.title} by ${song.artist} (${favoriteType})`);
 
       res.json(formatSuccessResponse('Added to favorites', {
         added: true,
-        favoriteId,
-        song: {
-          id: song.id,
-          title: song.title,
-          artist: song.artist
-        }
+        favorite: favorite.toJSON(),
+        song: song.toJSON()
       }));
     }
 
@@ -143,11 +137,12 @@ const toggleFavorite = async (req, res) => {
     logger.error('Toggle favorite error:', {
       error: error.message,
       stack: error.stack,
-      body: req.body
+      body: req.body,
+      user: req.user
     });
     
     res.status(500).json(
-      formatErrorResponse('Failed to toggle favorite', 
+      formatErrorResponse('Failed to toggle favorite',
         process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
       )
     );
@@ -157,35 +152,22 @@ const toggleFavorite = async (req, res) => {
 // Limpiar todos los favoritos de un usuario
 const clearAllFavorites = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.user.id;
+    const userType = req.user.type;
 
-    // Verificar autenticación
-    const { rows: userRows } = await executeQuery(
-      'SELECT id FROM users WHERE id = ? AND name IS NOT NULL AND email IS NOT NULL',
-      [userId]
-    );
+    let deletedCount = 0;
 
-    if (userRows.length === 0) {
+    if (userType === 'registered_user') {
+      deletedCount = await Favorite.deleteByRegisteredUser(userId);
+      logger.info(`All permanent favorites cleared for registered user: ${userId}, count: ${deletedCount}`);
+    } else if (userType === 'user') {
+      deletedCount = await Favorite.deleteByUser(userId);
+      logger.info(`All session favorites cleared for user: ${userId}, count: ${deletedCount}`);
+    } else {
       return res.status(401).json(
-        formatErrorResponse('Authentication required')
+        formatErrorResponse('Invalid user type')
       );
     }
-
-    // Obtener conteo antes de eliminar
-    const { rows: countRows } = await executeQuery(
-      'SELECT COUNT(*) as count FROM favorites WHERE user_id = ?',
-      [userId]
-    );
-
-    const deletedCount = countRows[0].count;
-
-    // Eliminar todos los favoritos del usuario
-    await executeQuery(
-      'DELETE FROM favorites WHERE user_id = ?',
-      [userId]
-    );
-
-    logger.info(`All favorites cleared for user: ${userId}, count: ${deletedCount}`);
 
     res.json(formatSuccessResponse('All favorites cleared', {
       deletedCount
