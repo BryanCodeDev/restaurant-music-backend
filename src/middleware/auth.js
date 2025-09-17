@@ -1,4 +1,4 @@
-// src/middleware/auth.js
+// src/middleware/auth.js - FIXED VERSION
 const jwt = require('jsonwebtoken');
 const { executeQuery } = require('../config/database');
 const { logger } = require('../utils/logger');
@@ -19,26 +19,81 @@ const authenticateToken = async (req, res, next) => {
     // Verificar token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
-    // Buscar usuario en base de datos (para restaurantes)
-    const { rows } = await executeQuery(
-      'SELECT id, name, email, is_active FROM restaurants WHERE id = ?',
-      [decoded.userId]
-    );
+    if (decoded.userType === 'restaurant') {
+      // Buscar restaurante en base de datos
+      const { rows } = await executeQuery(
+        'SELECT id, name, email, slug, is_active FROM restaurants WHERE id = ?',
+        [decoded.userId]
+      );
 
-    if (rows.length === 0 || !rows[0].is_active) {
+      if (rows.length === 0 || !rows[0].is_active) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid or inactive account'
+        });
+      }
+
+      // Agregar información del restaurante al request
+      req.user = {
+        id: decoded.userId,
+        email: decoded.email,
+        type: 'restaurant',
+        ...rows[0]
+      };
+
+    } else if (decoded.userType === 'registered_user') {
+      // Buscar usuario registrado en base de datos
+      const { rows } = await executeQuery(
+        'SELECT id, name, email, is_active FROM registered_users WHERE id = ?',
+        [decoded.userId]
+      );
+
+      if (rows.length === 0 || !rows[0].is_active) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid or inactive user account'
+        });
+      }
+
+      // Agregar información del usuario al request
+      req.user = {
+        id: decoded.userId,
+        email: decoded.email,
+        type: 'registered_user',
+        ...rows[0]
+      };
+
+    } else if (decoded.userType === 'user') {
+      // Usuario temporal (sesión de mesa)
+      const { rows } = await executeQuery(
+        'SELECT id, restaurant_id, table_number, session_id, name, user_type FROM users WHERE id = ?',
+        [decoded.userId]
+      );
+
+      if (rows.length === 0) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid user session'
+        });
+      }
+
+      // Agregar información del usuario temporal al request
+      req.user = {
+        id: decoded.userId,
+        type: 'user',
+        restaurantId: decoded.restaurantId,
+        tableNumber: decoded.tableNumber,
+        sessionId: decoded.sessionId,
+        registeredUserId: decoded.registeredUserId || null,
+        ...rows[0]
+      };
+
+    } else {
       return res.status(401).json({
         success: false,
-        message: 'Invalid or inactive account'
+        message: 'Invalid token type'
       });
     }
-
-    // Agregar información del usuario al request
-    req.user = {
-      id: decoded.userId,
-      email: decoded.email,
-      type: decoded.userType || 'restaurant',
-      ...rows[0]
-    };
 
     next();
   } catch (error) {
@@ -77,6 +132,18 @@ const requireRestaurant = (req, res, next) => {
   }
 };
 
+// Middleware para verificar que sea un usuario registrado
+const requireRegisteredUser = (req, res, next) => {
+  if (req.user && req.user.type === 'registered_user') {
+    next();
+  } else {
+    res.status(403).json({
+      success: false,
+      message: 'Registered user access required'
+    });
+  }
+};
+
 // Middleware opcional de autenticación (para usuarios anónimos)
 const optionalAuth = async (req, res, next) => {
   try {
@@ -94,7 +161,7 @@ const optionalAuth = async (req, res, next) => {
     
     if (decoded.userType === 'restaurant') {
       const { rows } = await executeQuery(
-        'SELECT id, name, email, is_active FROM restaurants WHERE id = ?',
+        'SELECT id, name, email, slug, is_active FROM restaurants WHERE id = ?',
         [decoded.userId]
       );
 
@@ -106,13 +173,29 @@ const optionalAuth = async (req, res, next) => {
           ...rows[0]
         };
       }
+    } else if (decoded.userType === 'registered_user') {
+      const { rows } = await executeQuery(
+        'SELECT id, name, email, is_active FROM registered_users WHERE id = ?',
+        [decoded.userId]
+      );
+
+      if (rows.length > 0 && rows[0].is_active) {
+        req.user = {
+          id: decoded.userId,
+          email: decoded.email,
+          type: 'registered_user',
+          ...rows[0]
+        };
+      }
     } else if (decoded.userType === 'user') {
       // Para usuarios temporales de mesa
       req.user = {
         id: decoded.userId,
         type: 'user',
         tableNumber: decoded.tableNumber,
-        restaurantId: decoded.restaurantId
+        restaurantId: decoded.restaurantId,
+        sessionId: decoded.sessionId,
+        registeredUserId: decoded.registeredUserId || null
       };
     }
 
@@ -124,84 +207,9 @@ const optionalAuth = async (req, res, next) => {
   }
 };
 
-// Middleware para generar sesión temporal de usuario (mesa)
-const createGuestSession = async (req, res, next) => {
-  try {
-    const { restaurantSlug, tableNumber } = req.params;
-    
-    if (!restaurantSlug) {
-      return res.status(400).json({
-        success: false,
-        message: 'Restaurant identifier required'
-      });
-    }
-
-    // Buscar restaurante
-    const { rows: restaurantRows } = await executeQuery(
-      'SELECT id, name, is_active FROM restaurants WHERE slug = ? AND is_active = true',
-      [restaurantSlug]
-    );
-
-    if (restaurantRows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Restaurant not found or inactive'
-      });
-    }
-
-    const restaurant = restaurantRows[0];
-
-    // Crear o encontrar sesión de usuario
-    const sessionId = `${restaurantSlug}-${tableNumber || 'anonymous'}-${Date.now()}`;
-    
-    // Crear usuario temporal
-    const { rows: userRows } = await executeQuery(
-      `INSERT INTO users (restaurant_id, table_number, session_id, ip_address, user_agent)
-       VALUES (?, ?, ?, ?, ?)`,
-      [
-        restaurant.id,
-        tableNumber || `Mesa #${Math.floor(Math.random() * 20) + 1}`,
-        sessionId,
-        req.ip,
-        req.get('User-Agent')
-      ]
-    );
-
-    // Generar token temporal
-    const tempToken = jwt.sign(
-      {
-        userId: userRows.insertId,
-        userType: 'user',
-        restaurantId: restaurant.id,
-        tableNumber: tableNumber || 'anonymous',
-        sessionId
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    req.tempUser = {
-      id: userRows.insertId,
-      restaurantId: restaurant.id,
-      tableNumber: tableNumber || 'anonymous',
-      sessionId,
-      token: tempToken
-    };
-
-    req.restaurant = restaurant;
-    next();
-  } catch (error) {
-    logger.error('Guest session creation error:', error.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create session'
-    });
-  }
-};
-
 module.exports = {
   authenticateToken,
   requireRestaurant,
-  optionalAuth,
-  createGuestSession
+  requireRegisteredUser,
+  optionalAuth
 };

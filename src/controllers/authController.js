@@ -1,4 +1,4 @@
-// src/controllers/authController.js - UPDATED FOR NEW DATABASE SCHEMA
+// src/controllers/authController.js - COMPLETE VERSION
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
@@ -14,6 +14,10 @@ const generateToken = (payload) => {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d'
   });
 };
+
+// =============================
+// RESTAURANT AUTH
+// =============================
 
 // Registro de restaurante
 const registerRestaurant = async (req, res) => {
@@ -94,13 +98,17 @@ const registerRestaurant = async (req, res) => {
     );
 
     // Generar QR code
-    const qrCodePath = await generateQRCode(restaurantId, finalSlug);
-
-    // Actualizar el path del QR en la base de datos
-    await executeQuery(
-      'UPDATE restaurants SET logo = ? WHERE id = ?',
-      [qrCodePath, restaurantId]
-    );
+    let qrCodePath = null;
+    try {
+      qrCodePath = await generateQRCode(restaurantId, finalSlug);
+      // Actualizar el path del QR en la base de datos
+      await executeQuery(
+        'UPDATE restaurants SET logo = ? WHERE id = ?',
+        [qrCodePath, restaurantId]
+      );
+    } catch (qrError) {
+      logger.warn('QR code generation failed:', qrError.message);
+    }
 
     // Enviar email de bienvenida (opcional)
     try {
@@ -139,7 +147,7 @@ const registerRestaurant = async (req, res) => {
           isActive: true,
           verified: false
         },
-        token
+        access_token: token
       }
     });
 
@@ -232,7 +240,7 @@ const loginRestaurant = async (req, res) => {
           verified: restaurant.verified,
           qrCode: qrCodePath
         },
-        token
+        access_token: token
       }
     });
 
@@ -245,6 +253,10 @@ const loginRestaurant = async (req, res) => {
     });
   }
 };
+
+// =============================
+// USER AUTH
+// =============================
 
 // Registro de usuario registrado
 const registerUser = async (req, res) => {
@@ -320,7 +332,7 @@ const registerUser = async (req, res) => {
           isPremium: false,
           emailVerified: false
         },
-        token
+        access_token: token
       }
     });
 
@@ -405,7 +417,7 @@ const loginUser = async (req, res) => {
           themePreference: user.theme_preference,
           privacyLevel: user.privacy_level
         },
-        token
+        access_token: token
       }
     });
 
@@ -516,6 +528,10 @@ const createUserSession = async (req, res) => {
     });
   }
 };
+
+// =============================
+// PROFILE MANAGEMENT
+// =============================
 
 // Obtener perfil del usuario autenticado - ACTUALIZADO
 const getProfile = async (req, res) => {
