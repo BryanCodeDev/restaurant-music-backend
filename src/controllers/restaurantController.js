@@ -4,6 +4,65 @@ const { regenerateQRCode } = require('../services/qrService');
 const { logger } = require('../utils/logger');
 const { formatSuccessResponse, formatErrorResponse } = require('../utils/helpers');
 
+// Endpoint para obtener planes de precios
+const getPricing = (req, res) => {
+  const pricingPlans = [
+    {
+      id: 'free',
+      name: 'Básico',
+      description: 'Acceso a canciones locales de tu base de datos. Ideal para empezar.',
+      price: 0,
+      currency: 'COP',
+      billingCycle: 'Mensual',
+      features: [
+        'Canciones locales ilimitadas',
+        'Gestión de cola básica',
+        'Estadísticas simples',
+        '1 usuario admin',
+        'Soporte básico'
+      ],
+      recommended: false
+    },
+    {
+      id: 'premium',
+      name: 'Premium',
+      description: 'Acceso completo a Spotify + canciones locales. Experiencia musical profesional.',
+      price: 50000,
+      currency: 'COP',
+      billingCycle: 'Mensual',
+      features: [
+        'Búsqueda en Spotify Premium',
+        'Reproducción en tiempo real',
+        'Canciones locales + Spotify',
+        'Estadísticas avanzadas',
+        'Soporte prioritario',
+        'Múltiples dispositivos'
+      ],
+      recommended: true
+    },
+    {
+      id: 'enterprise',
+      name: 'Enterprise',
+      description: 'Solución completa para cadenas de restaurantes con features avanzadas.',
+      price: 200000,
+      currency: 'COP',
+      billingCycle: 'Mensual',
+      features: [
+        'Todo en Premium + Analytics',
+        'Gestión multi-restaurante',
+        'Reportes personalizados',
+        'Integración API personal',
+        'Soporte 24/7',
+        'Usuarios ilimitados',
+        'Branding personalizado'
+      ],
+      recommended: false
+    }
+  ];
+
+  res.json(formatSuccessResponse('Planes de precios', { plans: pricingPlans }));
+};
+
 // Obtener restaurante por slug
 const getRestaurantBySlug = async (req, res) => {
   try {
@@ -213,7 +272,8 @@ const updateRestaurantSettings = async (req, res) => {
       max_requests_per_user,
       queue_limit,
       auto_play,
-      allow_explicit
+      allow_explicit,
+      subscriptionPlan
     } = req.body;
 
     if (user.type !== 'restaurant') {
@@ -235,9 +295,15 @@ const updateRestaurantSettings = async (req, res) => {
       );
     }
 
+    if (subscriptionPlan && !['free', 'premium', 'enterprise'].includes(subscriptionPlan)) {
+      return res.status(400).json(
+        formatErrorResponse('subscriptionPlan debe ser free, premium o enterprise')
+      );
+    }
+
     // Actualizar configuración
     await executeQuery(
-      `UPDATE restaurants 
+      `UPDATE restaurants
        SET name = COALESCE(?, name),
            phone = COALESCE(?, phone),
            address = COALESCE(?, address),
@@ -248,11 +314,12 @@ const updateRestaurantSettings = async (req, res) => {
            queue_limit = COALESCE(?, queue_limit),
            auto_play = COALESCE(?, auto_play),
            allow_explicit = COALESCE(?, allow_explicit),
+           subscription_plan = COALESCE(?, subscription_plan),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [
         name, phone, address, city, country, timezone,
-        max_requests_per_user, queue_limit, auto_play, allow_explicit,
+        max_requests_per_user, queue_limit, auto_play, allow_explicit, subscriptionPlan,
         user.id
       ]
     );
@@ -314,10 +381,10 @@ const getPublicRestaurants = async (req, res) => {
 
     // Consultar restaurantes con información adicional
     const { rows: restaurants } = await executeQuery(
-      `SELECT 
+      `SELECT
         id, name, slug, email, phone, address, city, country,
-        is_active, created_at, updated_at
-      FROM restaurants 
+        subscription_plan, is_active, created_at, updated_at
+      FROM restaurants
       WHERE ${whereClause}
       ORDER BY is_active DESC, name ASC
       LIMIT ? OFFSET ?`,
@@ -374,6 +441,7 @@ const getPublicRestaurants = async (req, res) => {
             address: restaurant.address,
             city: restaurant.city,
             country: restaurant.country,
+            subscriptionPlan: restaurant.subscription_plan,
             isActive: restaurant.is_active,
             
             // Datos enriquecidos
@@ -406,6 +474,7 @@ const getPublicRestaurants = async (req, res) => {
           // Retornar datos básicos si hay error
           return {
             ...restaurant,
+            subscriptionPlan: restaurant.subscription_plan,
             totalSongs: 0,
             queueLength: 0,
             activeCustomers: 0,
@@ -486,11 +555,80 @@ const regenerateQR = async (req, res) => {
   }
 };
 
+const Restaurant = require('../models/Restaurant');
+
+// Crear nuevo restaurante
+const createRestaurant = async (req, res) => {
+  try {
+    const {
+      name,
+      ownerName,
+      email,
+      password,
+      phone,
+      address,
+      city,
+      country,
+      subscriptionPlan = 'free'
+    } = req.body;
+
+    // Validación de subscriptionPlan
+    if (!['free', 'premium', 'enterprise'].includes(subscriptionPlan)) {
+      return res.status(400).json(
+        formatErrorResponse('subscriptionPlan debe ser free, premium o enterprise')
+      );
+    }
+
+    // Validaciones básicas
+    if (!name || !email || !password) {
+      return res.status(400).json(
+        formatErrorResponse('Name, email and password are required')
+      );
+    }
+
+    // Verificar si email ya existe
+    const existing = await Restaurant.findByEmail(email);
+    if (existing) {
+      return res.status(400).json(
+        formatErrorResponse('Email already registered')
+      );
+    }
+
+    const restaurantData = {
+      name,
+      ownerName,
+      email,
+      password, // Asume hashing en middleware o aquí
+      phone,
+      address,
+      city,
+      country,
+      subscriptionPlan
+    };
+
+    const newRestaurant = await Restaurant.create(restaurantData);
+
+    // Si planType es 'pro', opcional: redirigir a Spotify login
+    if (planType === 'pro') {
+      logger.info(`New pro restaurant created: ${newRestaurant.id}. Redirect to Spotify setup.`);
+    }
+
+    res.status(201).json(formatSuccessResponse('Restaurant created successfully', newRestaurant.toJSON()));
+  } catch (error) {
+    logger.error('Create restaurant error:', error.message);
+    res.status(500).json(
+      formatErrorResponse('Failed to create restaurant', error.message)
+    );
+  }
+};
+
 module.exports = {
   getRestaurantBySlug,
   getRestaurantStats,
   getRestaurantSettings,
   updateRestaurantSettings,
   getPublicRestaurants,  // NOW EXPORTED
-  regenerateQR
+  regenerateQR,
+  createRestaurant,
+  getPricing
 };

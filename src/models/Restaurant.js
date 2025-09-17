@@ -33,6 +33,7 @@ class Restaurant {
     this.allowExplicit = data.allow_explicit;
     this.isActive = data.is_active;
     this.subscriptionPlan = data.subscription_plan;
+    this.planType = data.subscription_plan || 'basic';
     this.lastLoginAt = data.last_login_at;
     this.settings = data.settings ? JSON.parse(data.settings) : {};
     this.createdAt = data.created_at;
@@ -141,7 +142,7 @@ class Restaurant {
           cuisine_type, price_range, rating, total_reviews, verified, verification_date,
           timezone, max_requests_per_user, queue_limit, auto_play, allow_explicit,
           is_active, subscription_plan, last_login_at, settings
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           restaurantData.id, restaurantData.name, restaurantData.owner_name, restaurantData.slug,
           restaurantData.email, restaurantData.password, restaurantData.phone,
