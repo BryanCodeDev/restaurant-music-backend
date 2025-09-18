@@ -4,9 +4,11 @@ const { logger } = require('../utils/logger');
 
 // Middleware para manejar errores de validación
 const validate = (req, res, next) => {
-  // Detect erroneous requests replaying response (contains access_token)
-  if (req.body.access_token) {
-    logger.warn('Erroneous registration attempt with access_token in body - likely frontend response replay', {
+  // Detect erroneous requests replaying response (contains access_token or nested user with token)
+  const isAuthEndpoint = req.originalUrl.includes('/auth/');
+  if (isAuthEndpoint && (req.body.access_token || (req.body.user && req.body.access_token))) {
+    const endpoint = req.originalUrl.includes('register-user') ? 'registration' : req.originalUrl.includes('login-user') ? 'login' : 'auth';
+    logger.warn(`Erroneous ${endpoint} attempt with access_token in body - likely frontend response replay`, {
       url: req.originalUrl,
       method: req.method,
       body: req.body,
@@ -15,7 +17,24 @@ const validate = (req, res, next) => {
 
     return res.status(400).json({
       success: false,
-      message: 'Invalid registration request - user may already be registered'
+      message: `Invalid ${endpoint} request - user may already be authenticated`
+    });
+  }
+
+  // Additional detection for malformed login requests (e.g., {"email": "@"} without password)
+  if (req.originalUrl.includes('/login-user') &&
+      req.body.email &&
+      (!req.body.password || req.body.email === '@' || !req.body.email.includes('@'))) {
+    logger.warn('Erroneous login attempt with malformed email - likely frontend error replay', {
+      url: req.originalUrl,
+      method: req.method,
+      body: req.body,
+      ip: req.ip
+    });
+
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid login request - please check your credentials'
     });
   }
 
