@@ -181,5 +181,16 @@ module.exports = {
   randomBetween,
   formatFileSize,
   sleep,
-  retry
+  retry,
+  // Role validation for new integrations
+  isValidRole: (role) => ['user', 'superadmin'].includes(role),
+  requireRole: (user, requiredRole) => user && user.type === 'registered_user' && user.role === requiredRole,
+  // Admin-specific helpers
+  formatAdminStats: (stats) => ({
+    totalUsers: stats.totalUsers || 0,
+    totalRestaurants: stats.totalRestaurants || 0,
+    totalRequests: stats.totalRequests || 0,
+    pendingRestaurants: stats.pendingRestaurants || 0,
+    lastUpdated: new Date().toISOString()
+  })
 };

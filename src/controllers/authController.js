@@ -8,6 +8,17 @@ const { sendWelcomeEmail, sendVerificationEmail } = require('../services/emailSe
 const { createSlug } = require('../utils/helpers');
 const { logger } = require('../utils/logger');
 
+// Función helper segura para parsear JSON con fallback
+const safeJsonParse = (str, fallback) => {
+  if (!str || typeof str !== 'string' || str.trim() === '') return fallback;
+  try {
+    return JSON.parse(str);
+  } catch (e) {
+    logger.warn('Invalid JSON in DB field, using fallback:', { field: str, error: e.message });
+    return fallback;
+  }
+};
+
 // Generar JWT token
 const generateToken = (payload) => {
   if (!process.env.JWT_SECRET) {
@@ -435,9 +446,9 @@ const loginUser = async (req, res) => {
 
     // Buscar usuario registrado
     const { rows } = await executeQuery(
-      `SELECT id, name, email, password, phone, preferred_genres, 
+      `SELECT id, name, email, password, phone, preferred_genres,
               preferred_languages, is_active, is_premium, email_verified,
-              theme_preference, privacy_level, created_at
+              theme_preference, privacy_level, role, created_at
        FROM registered_users WHERE email = ?`,
       [email]
     );
@@ -477,11 +488,15 @@ const loginUser = async (req, res) => {
     );
 
     // Generar token
-    const token = generateToken({
+    const tokenPayload = {
       userId: user.id,
       email: user.email,
       userType: 'registered_user'
-    });
+    };
+    if (user.role === 'superadmin') {
+      tokenPayload.role = user.role;
+    }
+    const token = generateToken(tokenPayload);
 
     logger.info(`Registered user login: ${user.name} (${email})`);
 
@@ -494,12 +509,13 @@ const loginUser = async (req, res) => {
           name: user.name,
           email: user.email,
           phone: user.phone,
-          preferredGenres: JSON.parse(user.preferred_genres || '[]'),
-          preferredLanguages: JSON.parse(user.preferred_languages || '["es"]'),
+          preferredGenres: safeJsonParse(user.preferred_genres, []),
+          preferredLanguages: safeJsonParse(user.preferred_languages, ['es']),
           isPremium: user.is_premium,
           emailVerified: user.email_verified,
           themePreference: user.theme_preference,
           privacyLevel: user.privacy_level,
+          role: user.role,
           createdAt: user.created_at
         },
         access_token: token
@@ -682,9 +698,9 @@ const getProfile = async (req, res) => {
     } else if (user.type === 'registered_user') {
       const { rows } = await executeQuery(
         `SELECT id, name, email, phone, avatar, bio, date_of_birth,
-                preferred_genres, preferred_languages, theme_preference, 
+                preferred_genres, preferred_languages, theme_preference,
                 privacy_level, is_premium, email_verified, total_requests,
-                favorite_restaurant_id, created_at
+                favorite_restaurant_id, role, created_at
          FROM registered_users WHERE id = ?`,
         [user.id]
       );
@@ -703,8 +719,9 @@ const getProfile = async (req, res) => {
         data: {
           user: {
             ...userData,
-            preferredGenres: JSON.parse(userData.preferred_genres || '[]'),
-            preferredLanguages: JSON.parse(userData.preferred_languages || '["es"]')
+            preferredGenres: safeJsonParse(userData.preferred_genres, []),
+            preferredLanguages: safeJsonParse(userData.preferred_languages, ['es']),
+            role: userData.role
           }
         }
       });

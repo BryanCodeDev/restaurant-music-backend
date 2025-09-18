@@ -4,6 +4,21 @@ const { logger } = require('../utils/logger');
 
 // Middleware para manejar errores de validación
 const validate = (req, res, next) => {
+  // Detect erroneous requests replaying response (contains access_token)
+  if (req.body.access_token) {
+    logger.warn('Erroneous registration attempt with access_token in body - likely frontend response replay', {
+      url: req.originalUrl,
+      method: req.method,
+      body: req.body,
+      ip: req.ip
+    });
+
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid registration request - user may already be registered'
+    });
+  }
+
   const errors = validationResult(req);
   
   if (!errors.isEmpty()) {

@@ -8,6 +8,7 @@ const { logger } = require('./utils/logger');
 
 // Import routes
 const authRoutes = require('./routes/auth');
+const adminRoutes = require('./routes/admin');
 const restaurantRoutes = require('./routes/restaurants');
 const songRoutes = require('./routes/songs');
 const requestRoutes = require('./routes/requests');
@@ -102,6 +103,7 @@ const apiRouter = express.Router();
 
 // Mount routes
 apiRouter.use('/auth', authRoutes);
+apiRouter.use('/admin', adminRoutes);
 apiRouter.use('/restaurants', restaurantRoutes);
 apiRouter.use('/songs', songRoutes);
 apiRouter.use('/requests', requestRoutes);

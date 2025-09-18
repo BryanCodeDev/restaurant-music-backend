@@ -120,8 +120,53 @@ const rejectRestaurant = async (req, res) => {
   }
 };
 
+// Obtener estadísticas globales
+const getGlobalStats = async (req, res) => {
+  try {
+    // Total users
+    const { rows: userRows } = await executeQuery(
+      'SELECT COUNT(*) as totalUsers FROM registered_users'
+    );
+
+    // Total restaurants
+    const { rows: restaurantRows } = await executeQuery(
+      'SELECT COUNT(*) as totalRestaurants FROM restaurants'
+    );
+
+    // Total requests
+    const { rows: requestRows } = await executeQuery(
+      'SELECT COALESCE(SUM(total_requests), 0) as totalRequests FROM registered_users'
+    );
+
+    // Pending restaurants
+    const { rows: pendingRows } = await executeQuery(
+      'SELECT COUNT(*) as pendingRestaurants FROM restaurants WHERE pending_approval = true'
+    );
+
+    const stats = {
+      totalUsers: parseInt(userRows[0].totalUsers) || 0,
+      totalRestaurants: parseInt(restaurantRows[0].totalRestaurants) || 0,
+      totalRequests: parseInt(requestRows[0].totalRequests) || 0,
+      pendingRestaurants: parseInt(pendingRows[0].pendingRestaurants) || 0
+    };
+
+    res.json({
+      success: true,
+      message: 'Global stats retrieved successfully',
+      data: stats
+    });
+  } catch (error) {
+    logger.error('Get global stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve global stats'
+    });
+  }
+};
+
 module.exports = {
   getPendingRestaurants,
   approveRestaurant,
-  rejectRestaurant
+  rejectRestaurant,
+  getGlobalStats
 };

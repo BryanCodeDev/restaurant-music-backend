@@ -46,7 +46,7 @@ const authenticateToken = async (req, res, next) => {
     } else if (decoded.userType === 'registered_user') {
       // Buscar usuario registrado en base de datos
       const { rows } = await executeQuery(
-        'SELECT id, name, email, is_active FROM registered_users WHERE id = ?',
+        'SELECT id, name, email, is_active, role FROM registered_users WHERE id = ?',
         [decoded.userId]
       );
 
@@ -63,7 +63,8 @@ const authenticateToken = async (req, res, next) => {
         email: decoded.email,
         type: 'registered_user',
         name: rows[0].name,
-        isActive: rows[0].is_active
+        isActive: rows[0].is_active,
+        role: rows[0].role
       };
 
     } else if (decoded.userType === 'user') {
@@ -179,7 +180,7 @@ const optionalAuth = async (req, res, next) => {
       }
     } else if (decoded.userType === 'registered_user') {
       const { rows } = await executeQuery(
-        'SELECT id, name, email, is_active FROM registered_users WHERE id = ?',
+        'SELECT id, name, email, is_active, role FROM registered_users WHERE id = ?',
         [decoded.userId]
       );
 
@@ -188,7 +189,8 @@ const optionalAuth = async (req, res, next) => {
           id: decoded.userId,
           email: decoded.email,
           type: 'registered_user',
-          name: rows[0].name
+          name: rows[0].name,
+          role: rows[0].role
         };
       }
     } else if (decoded.userType === 'user') {
@@ -211,9 +213,22 @@ const optionalAuth = async (req, res, next) => {
   }
 };
 
+// Middleware para verificar que sea superadmin
+const requireSuperAdmin = (req, res, next) => {
+  if (req.user && req.user.type === 'registered_user' && req.user.role === 'superadmin') {
+    next();
+  } else {
+    res.status(403).json({
+      success: false,
+      message: 'Superadmin access required'
+    });
+  }
+};
+
 module.exports = {
   authenticateToken,
   requireRestaurant,
   requireRegisteredUser,
-  optionalAuth
+  optionalAuth,
+  requireSuperAdmin
 };

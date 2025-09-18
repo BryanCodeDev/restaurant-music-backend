@@ -2,22 +2,10 @@
 const express = require('express');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validation');
-const { authenticateToken } = require('../middleware/auth');
-const { getPendingRestaurants, approveRestaurant, rejectRestaurant } = require('../controllers/adminController');
+const { authenticateToken, requireSuperAdmin } = require('../middleware/auth');
+const { getPendingRestaurants, approveRestaurant, rejectRestaurant, getGlobalStats } = require('../controllers/adminController');
 
 const router = express.Router();
-
-// Middleware para superadmin (se añadirá en auth.js)
-const requireSuperAdmin = (req, res, next) => {
-  if (req.user && req.user.type === 'superadmin') {
-    next();
-  } else {
-    res.status(403).json({
-      success: false,
-      message: 'Superadmin access required'
-    });
-  }
-};
 
 // Validaciones para approve/reject
 const approvalValidation = [
@@ -37,6 +25,7 @@ const approvalValidation = [
 
 // Rutas protegidas por superadmin
 router.get('/pending-restaurants', authenticateToken, requireSuperAdmin, getPendingRestaurants);
+router.get('/global-stats', authenticateToken, requireSuperAdmin, getGlobalStats);
 router.patch('/approve-restaurant/:id', authenticateToken, requireSuperAdmin, approvalValidation, validate, approveRestaurant);
 router.post('/reject-restaurant/:id', authenticateToken, requireSuperAdmin, approvalValidation, validate, rejectRestaurant);
 

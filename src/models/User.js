@@ -26,6 +26,7 @@ class RegisteredUser {
     this.loginCount = data.login_count;
     this.totalRequests = data.total_requests;
     this.favoriteRestaurantId = data.favorite_restaurant_id;
+    this.role = data.role || 'user';
     this.createdAt = data.created_at;
     this.updatedAt = data.updated_at;
   }
@@ -45,11 +46,11 @@ class RegisteredUser {
   static async findById(id) {
     try {
       const { rows } = await executeQuery(
-        `SELECT id, name, email, phone, avatar, bio, date_of_birth, 
+        `SELECT id, name, email, phone, avatar, bio, date_of_birth,
                 preferred_genres, preferred_languages, notification_preferences,
-                theme_preference, privacy_level, is_active, is_premium, 
+                theme_preference, privacy_level, is_active, is_premium,
                 email_verified, email_verified_at, last_login_at, login_count,
-                total_requests, favorite_restaurant_id, created_at, updated_at
+                total_requests, favorite_restaurant_id, role, created_at, updated_at
          FROM registered_users WHERE id = ?`,
         [id]
       );
@@ -64,11 +65,11 @@ class RegisteredUser {
   static async findByEmail(email) {
     try {
       const { rows } = await executeQuery(
-        `SELECT id, name, email, password, phone, avatar, bio, date_of_birth, 
+        `SELECT id, name, email, password, phone, avatar, bio, date_of_birth,
                 preferred_genres, preferred_languages, notification_preferences,
-                theme_preference, privacy_level, is_active, is_premium, 
+                theme_preference, privacy_level, is_active, is_premium,
                 email_verified, email_verified_at, last_login_at, login_count,
-                total_requests, favorite_restaurant_id, created_at, updated_at
+                total_requests, favorite_restaurant_id, role, created_at, updated_at
          FROM registered_users WHERE email = ?`,
         [email]
       );
@@ -228,6 +229,7 @@ class RegisteredUser {
       loginCount: this.loginCount,
       totalRequests: this.totalRequests,
       favoriteRestaurantId: this.favoriteRestaurantId,
+      role: this.role,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt
     };

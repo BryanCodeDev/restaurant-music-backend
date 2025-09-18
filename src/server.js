@@ -27,9 +27,17 @@ const startServer = async () => {
         logger.info(`📋 Available endpoints:`);
         logger.info(`   - GET  /api/v1/health`);
         logger.info(`   - POST /api/v1/auth/register`);
-        logger.info(`   - POST /api/v1/auth/login`);
+        logger.info(`   - POST /api/v1/auth/login-user`);
+        logger.info(`   - POST /api/v1/auth/register-restaurant`);
+        logger.info(`   - POST /api/v1/auth/login-restaurant`);
+        logger.info(`   - GET  /api/v1/auth/profile`);
+        logger.info(`   - PUT  /api/v1/auth/profile`);
         logger.info(`   - GET  /api/v1/restaurants/:slug/songs`);
         logger.info(`   - POST /api/v1/requests`);
+        logger.info(`   - GET  /api/v1/admin/pending-restaurants`);
+        logger.info(`   - GET  /api/v1/admin/global-stats`);
+        logger.info(`   - PATCH /api/v1/admin/approve-restaurant/:id`);
+        logger.info(`   - POST /api/v1/admin/reject-restaurant/:id`);
       }
     });
 
