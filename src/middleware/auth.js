@@ -1,4 +1,4 @@
-// src/middleware/auth.js - FIXED VERSION
+// src/middleware/auth.js - VERSIÓN CORREGIDA
 const jwt = require('jsonwebtoken');
 const { executeQuery } = require('../config/database');
 const { logger } = require('../utils/logger');
@@ -38,7 +38,9 @@ const authenticateToken = async (req, res, next) => {
         id: decoded.userId,
         email: decoded.email,
         type: 'restaurant',
-        ...rows[0]
+        name: rows[0].name,
+        slug: rows[0].slug,
+        isActive: rows[0].is_active
       };
 
     } else if (decoded.userType === 'registered_user') {
@@ -60,7 +62,8 @@ const authenticateToken = async (req, res, next) => {
         id: decoded.userId,
         email: decoded.email,
         type: 'registered_user',
-        ...rows[0]
+        name: rows[0].name,
+        isActive: rows[0].is_active
       };
 
     } else if (decoded.userType === 'user') {
@@ -85,7 +88,7 @@ const authenticateToken = async (req, res, next) => {
         tableNumber: decoded.tableNumber,
         sessionId: decoded.sessionId,
         registeredUserId: decoded.registeredUserId || null,
-        ...rows[0]
+        name: rows[0].name
       };
 
     } else {
@@ -170,7 +173,8 @@ const optionalAuth = async (req, res, next) => {
           id: decoded.userId,
           email: decoded.email,
           type: 'restaurant',
-          ...rows[0]
+          name: rows[0].name,
+          slug: rows[0].slug
         };
       }
     } else if (decoded.userType === 'registered_user') {
@@ -184,7 +188,7 @@ const optionalAuth = async (req, res, next) => {
           id: decoded.userId,
           email: decoded.email,
           type: 'registered_user',
-          ...rows[0]
+          name: rows[0].name
         };
       }
     } else if (decoded.userType === 'user') {

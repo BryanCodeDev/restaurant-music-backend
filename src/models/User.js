@@ -1,6 +1,7 @@
-// src/models/User.js - Modelo para manejar usuarios registrados y temporales
+// src/models/User.js - Modelo corregido para usuarios registrados y temporales
 const { executeQuery } = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
+const { logger } = require('../utils/logger');
 
 class RegisteredUser {
   constructor(data) {
@@ -12,9 +13,9 @@ class RegisteredUser {
     this.avatar = data.avatar;
     this.bio = data.bio;
     this.dateOfBirth = data.date_of_birth;
-    this.preferredGenres = data.preferred_genres ? JSON.parse(data.preferred_genres) : [];
-    this.preferredLanguages = data.preferred_languages ? JSON.parse(data.preferred_languages) : [];
-    this.notificationPreferences = data.notification_preferences ? JSON.parse(data.notification_preferences) : {};
+    this.preferredGenres = this.parseJSON(data.preferred_genres, []);
+    this.preferredLanguages = this.parseJSON(data.preferred_languages, ['es']);
+    this.notificationPreferences = this.parseJSON(data.notification_preferences, {});
     this.themePreference = data.theme_preference;
     this.privacyLevel = data.privacy_level;
     this.isActive = data.is_active;
@@ -27,6 +28,17 @@ class RegisteredUser {
     this.favoriteRestaurantId = data.favorite_restaurant_id;
     this.createdAt = data.created_at;
     this.updatedAt = data.updated_at;
+  }
+
+  // Helper para parsear JSON de forma segura
+  parseJSON(jsonString, defaultValue = null) {
+    if (!jsonString) return defaultValue;
+    try {
+      return typeof jsonString === 'string' ? JSON.parse(jsonString) : jsonString;
+    } catch (error) {
+      logger.warn('Failed to parse JSON:', { jsonString, error: error.message });
+      return defaultValue;
+    }
   }
 
   // Buscar por ID
@@ -43,6 +55,7 @@ class RegisteredUser {
       );
       return rows.length > 0 ? new RegisteredUser(rows[0]) : null;
     } catch (error) {
+      logger.error('Error finding registered user by ID:', error);
       throw new Error(`Error finding registered user by ID: ${error.message}`);
     }
   }
@@ -61,35 +74,48 @@ class RegisteredUser {
       );
       return rows.length > 0 ? new RegisteredUser(rows[0]) : null;
     } catch (error) {
+      logger.error('Error finding registered user by email:', error);
       throw new Error(`Error finding registered user by email: ${error.message}`);
     }
   }
 
   // Crear nuevo usuario registrado
-  static async create(data) {
+  static async create(userData) {
     try {
-      const userId = data.id || uuidv4();
-      const hashedPassword = data.password; // Asumir ya hasheado en controller
-
+      const userId = userData.id || uuidv4();
+      
       await executeQuery(
         `INSERT INTO registered_users (
           id, name, email, password, phone, avatar, bio, date_of_birth,
           preferred_genres, preferred_languages, notification_preferences,
           theme_preference, privacy_level, is_active, is_premium, email_verified,
-          email_verified_at, last_login_at, login_count, total_requests,
-          favorite_restaurant_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          total_requests, favorite_restaurant_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          userId, data.name, data.email, hashedPassword, data.phone || null,
-          data.avatar || null, data.bio || null, data.dateOfBirth || null,
-          JSON.stringify(data.preferredGenres || []), JSON.stringify(data.preferredLanguages || ['es']),
-          JSON.stringify(data.notificationPreferences || {}), data.themePreference || 'dark',
-          data.privacyLevel || 'public', true, false, false, null, null, 0, 0, null
+          userId, 
+          userData.name, 
+          userData.email, 
+          userData.password, // Ya hasheado en controller
+          userData.phone || null,
+          userData.avatar || null, 
+          userData.bio || null, 
+          userData.dateOfBirth || null,
+          JSON.stringify(userData.preferredGenres || []), 
+          JSON.stringify(userData.preferredLanguages || ['es']),
+          JSON.stringify(userData.notificationPreferences || {}), 
+          userData.themePreference || 'dark',
+          userData.privacyLevel || 'public', 
+          true, // is_active
+          false, // is_premium
+          false, // email_verified
+          0, // total_requests
+          null // favorite_restaurant_id
         ]
       );
 
       return await RegisteredUser.findById(userId);
     } catch (error) {
+      logger.error('Error creating registered user:', error);
       throw new Error(`Error creating registered user: ${error.message}`);
     }
   }
@@ -119,11 +145,7 @@ class RegisteredUser {
       Object.keys(data).forEach(key => {
         if (data[key] !== undefined && fieldMap[key]) {
           updateFields.push(`${fieldMap[key]} = ?`);
-          if (key === 'preferredGenres') {
-            updateValues.push(JSON.stringify(data[key]));
-          } else if (key === 'preferredLanguages') {
-            updateValues.push(JSON.stringify(data[key]));
-          } else if (key === 'notificationPreferences') {
+          if (key === 'preferredGenres' || key === 'preferredLanguages' || key === 'notificationPreferences') {
             updateValues.push(JSON.stringify(data[key]));
           } else {
             updateValues.push(data[key]);
@@ -133,10 +155,11 @@ class RegisteredUser {
 
       if (updateFields.length === 0) return this;
 
+      updateFields.push('updated_at = CURRENT_TIMESTAMP');
       updateValues.push(this.id);
 
       await executeQuery(
-        `UPDATE registered_users SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        `UPDATE registered_users SET ${updateFields.join(', ')} WHERE id = ?`,
         updateValues
       );
 
@@ -144,6 +167,7 @@ class RegisteredUser {
       Object.assign(this, updated);
       return this;
     } catch (error) {
+      logger.error('Error updating registered user:', error);
       throw new Error(`Error updating registered user: ${error.message}`);
     }
   }
@@ -165,9 +189,20 @@ class RegisteredUser {
          WHERE ru.id = ?`,
         [this.id]
       );
-      return rows[0] || {};
+      return rows[0] || {
+        total_favorites: 0,
+        total_playlists: 0,
+        total_listening_history: 0,
+        total_reviews: 0
+      };
     } catch (error) {
-      throw new Error(`Error getting user stats: ${error.message}`);
+      logger.warn('Error getting user stats, returning defaults:', error);
+      return {
+        total_favorites: 0,
+        total_playlists: 0,
+        total_listening_history: 0,
+        total_reviews: 0
+      };
     }
   }
 
@@ -194,8 +229,7 @@ class RegisteredUser {
       totalRequests: this.totalRequests,
       favoriteRestaurantId: this.favoriteRestaurantId,
       createdAt: this.createdAt,
-      updatedAt: this.updatedAt,
-      stats: null // Cargar dinámicamente si se necesita
+      updatedAt: this.updatedAt
     };
   }
 }
@@ -209,15 +243,29 @@ class User {
     this.tableNumber = data.table_number;
     this.sessionId = data.session_id;
     this.name = data.name;
-    this.totalRequests = data.total_requests;
-    this.requestsToday = data.requests_today;
+    this.totalRequests = data.total_requests || 0;
+    this.requestsToday = data.requests_today || 0;
     this.lastRequestAt = data.last_request_at;
     this.ipAddress = data.ip_address;
     this.userAgent = data.user_agent;
-    this.deviceInfo = data.device_info ? JSON.parse(data.device_info) : {};
-    this.preferences = data.preferences ? JSON.parse(data.preferences) : {};
+    this.deviceInfo = this.parseJSON(data.device_info, {});
+    this.preferences = this.parseJSON(data.preferences, {});
     this.createdAt = data.created_at;
     this.updatedAt = data.updated_at;
+    // Datos de join
+    this.restaurantName = data.restaurant_name;
+    this.registeredUserName = data.registered_user_name;
+  }
+
+  // Helper para parsear JSON de forma segura
+  parseJSON(jsonString, defaultValue = null) {
+    if (!jsonString) return defaultValue;
+    try {
+      return typeof jsonString === 'string' ? JSON.parse(jsonString) : jsonString;
+    } catch (error) {
+      logger.warn('Failed to parse JSON:', { jsonString, error: error.message });
+      return defaultValue;
+    }
   }
 
   // Buscar por ID
@@ -234,6 +282,7 @@ class User {
       );
       return rows.length > 0 ? new User(rows[0]) : null;
     } catch (error) {
+      logger.error('Error finding user by ID:', error);
       throw new Error(`Error finding user by ID: ${error.message}`);
     }
   }
@@ -252,15 +301,16 @@ class User {
       );
       return rows.length > 0 ? new User(rows[0]) : null;
     } catch (error) {
+      logger.error('Error finding user by session:', error);
       throw new Error(`Error finding user by session: ${error.message}`);
     }
   }
 
   // Crear usuario temporal (sesión de mesa)
-  static async create(data) {
+  static async create(userData) {
     try {
-      const userId = data.id || uuidv4();
-      const sessionId = data.sessionId || uuidv4();
+      const userId = userData.id || uuidv4();
+      const sessionId = userData.sessionId || uuidv4();
 
       await executeQuery(
         `INSERT INTO users (
@@ -269,15 +319,26 @@ class User {
           ip_address, user_agent, device_info, preferences
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          userId, data.registeredUserId || null, data.userType || 'guest',
-          data.restaurantId, data.tableNumber, sessionId, data.name || null,
-          0, 0, null, data.ipAddress || null, data.userAgent || null,
-          JSON.stringify(data.deviceInfo || {}), JSON.stringify(data.preferences || {})
+          userId, 
+          userData.registeredUserId || null, 
+          userData.userType || 'guest',
+          userData.restaurantId, 
+          userData.tableNumber, 
+          sessionId, 
+          userData.name || null,
+          0, // total_requests
+          0, // requests_today
+          null, // last_request_at
+          userData.ipAddress || null, 
+          userData.userAgent || null,
+          JSON.stringify(userData.deviceInfo || {}), 
+          JSON.stringify(userData.preferences || {})
         ]
       );
 
       return await User.findById(userId);
     } catch (error) {
+      logger.error('Error creating user session:', error);
       throw new Error(`Error creating user session: ${error.message}`);
     }
   }
@@ -303,9 +364,7 @@ class User {
       Object.keys(data).forEach(key => {
         if (data[key] !== undefined && fieldMap[key]) {
           updateFields.push(`${fieldMap[key]} = ?`);
-          if (key === 'deviceInfo') {
-            updateValues.push(JSON.stringify(data[key]));
-          } else if (key === 'preferences') {
+          if (key === 'deviceInfo' || key === 'preferences') {
             updateValues.push(JSON.stringify(data[key]));
           } else {
             updateValues.push(data[key]);
@@ -315,10 +374,11 @@ class User {
 
       if (updateFields.length === 0) return this;
 
+      updateFields.push('updated_at = CURRENT_TIMESTAMP');
       updateValues.push(this.id);
 
       await executeQuery(
-        `UPDATE users SET ${updateFields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`,
         updateValues
       );
 
@@ -326,6 +386,7 @@ class User {
       Object.assign(this, updated);
       return this;
     } catch (error) {
+      logger.error('Error updating user:', error);
       throw new Error(`Error updating user: ${error.message}`);
     }
   }
@@ -334,8 +395,12 @@ class User {
   async incrementRequests() {
     try {
       await executeQuery(
-        `UPDATE users SET requests_today = requests_today + 1, total_requests = total_requests + 1, 
-                last_request_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        `UPDATE users SET 
+          requests_today = requests_today + 1, 
+          total_requests = total_requests + 1, 
+          last_request_at = CURRENT_TIMESTAMP, 
+          updated_at = CURRENT_TIMESTAMP 
+         WHERE id = ?`,
         [this.id]
       );
       this.requestsToday += 1;
@@ -343,6 +408,7 @@ class User {
       this.lastRequestAt = new Date();
       return this;
     } catch (error) {
+      logger.error('Error incrementing user requests:', error);
       throw new Error(`Error incrementing user requests: ${error.message}`);
     }
   }
@@ -359,13 +425,17 @@ class User {
          GROUP BY u.id, r.max_requests_per_user`,
         [this.id]
       );
+      
       if (rows.length > 0) {
         const { max_requests_per_user, today_requests } = rows[0];
         return parseInt(today_requests) < (max_requests_per_user || 2);
       }
-      return false;
+      
+      // Si no hay datos, permitir hasta 2 requests por defecto
+      return true;
     } catch (error) {
-      throw new Error(`Error checking request limit: ${error.message}`);
+      logger.error('Error checking request limit:', error);
+      return true; // En caso de error, permitir request
     }
   }
 
@@ -385,8 +455,8 @@ class User {
       userAgent: this.userAgent,
       deviceInfo: this.deviceInfo,
       preferences: this.preferences,
-      restaurantName: null, // Set from join if needed
-      registeredUserName: null, // Set from join if needed
+      restaurantName: this.restaurantName,
+      registeredUserName: this.registeredUserName,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt
     };

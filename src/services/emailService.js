@@ -9,7 +9,7 @@ const createTransporter = () => {
     return null;
   }
 
-  return nodemailer.createTransporter({
+  return nodemailer.createTransport({
     host: process.env.EMAIL_HOST,
     port: parseInt(process.env.EMAIL_PORT) || 587,
     secure: false, // true para 465, false para otros puertos
@@ -356,11 +356,61 @@ const sendTestEmail = async (toEmail) => {
   }
 };
 
+const sendVerificationEmail = async (userEmail, userName, verificationToken) => {
+  const transporter = createTransporter();
+  if (!transporter) return false;
+
+  try {
+    const verificationUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}&email=${encodeURIComponent(userEmail)}`;
+
+    const content = `
+      <h2>¡Verifica tu Cuenta en MusicMenu!</h2>
+      <p>Hola ${userName},</p>
+      <p>Gracias por registrarte en MusicMenu. Para completar tu registro y activar tu cuenta, por favor verifica tu email haciendo clic en el botón de abajo.</p>
+      
+      <div class="highlight">
+        <p><strong>¿Por qué verificar?</strong></p>
+        <ul>
+          <li>✅ Activa tu cuenta completamente</li>
+          <li>✅ Accede a todas las funciones</li>
+          <li>✅ Mejora la seguridad</li>
+        </ul>
+      </div>
+
+      <p>Si no verificas tu email en las próximas 24 horas, podrás solicitar un nuevo enlace.</p>
+      
+      <a href="${verificationUrl}" class="button">Verificar Email Ahora</a>
+      
+      <p>O copia y pega esta URL en tu navegador:</p>
+      <p style="word-break: break-all; color: #666; background: #f8f9fa; padding: 10px; border-radius: 5px;">${verificationUrl}</p>
+      
+      <p>Si no solicitaste este registro, puedes ignorar este email.</p>
+      <p>¡Estamos emocionados de que formes parte de nuestra comunidad musical!</p>
+    `;
+
+    const mailOptions = {
+      from: `"MusicMenu" <${process.env.EMAIL_FROM || process.env.EMAIL_USER}>`,
+      to: userEmail,
+      subject: 'Verifica tu Email - MusicMenu',
+      html: createEmailTemplate('¡Verifica tu Email!', content)
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    logger.info(`Verification email sent to ${userEmail}: ${info.messageId}`);
+    return true;
+
+  } catch (error) {
+    logger.error('Error sending verification email:', error.message);
+    return false;
+  }
+};
+
 module.exports = {
   sendWelcomeEmail,
   sendPasswordResetEmail,
   sendSecurityAlert,
   sendWeeklyReport,
   verifyEmailConfig,
-  sendTestEmail
+  sendTestEmail,
+  sendVerificationEmail
 };

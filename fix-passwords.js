@@ -3,7 +3,7 @@
 
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
-const pool = require('./src/config/db'); // Ajusta la ruta según tu proyecto
+const { executeQuery } = require('./src/config/database');
 
 async function hashPassword(password) {
   const salt = await bcrypt.genSalt(10);
@@ -32,7 +32,7 @@ async function fixPasswords() {
       const hashedPassword = await hashPassword(acc.password);
 
       // Actualizar en la tabla correspondiente
-      const [result] = await pool.query(
+      const { rows: result } = await executeQuery(
         `UPDATE ${acc.table} SET password = ? WHERE email = ?`,
         [hashedPassword, acc.email]
       );

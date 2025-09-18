@@ -1,15 +1,18 @@
-// src/controllers/authController.js - COMPLETE VERSION
+// src/controllers/authController.js - VERSIÓN CORREGIDA
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { executeQuery } = require('../config/database');
 const { generateQRCode } = require('../services/qrService');
-const { sendWelcomeEmail } = require('../services/emailService');
-const { logger } = require('../utils/logger');
+const { sendWelcomeEmail, sendVerificationEmail } = require('../services/emailService');
 const { createSlug } = require('../utils/helpers');
+const { logger } = require('../utils/logger');
 
 // Generar JWT token
 const generateToken = (payload) => {
+  if (!process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET is not defined');
+  }
   return jwt.sign(payload, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d'
   });
@@ -36,7 +39,15 @@ const registerRestaurant = async (req, res) => {
       description
     } = req.body;
 
-    // Verificar si el email ya existe
+    // Validaciones básicas
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email and password are required'
+      });
+    }
+
+    // Verificar si el email ya existe en restaurants
     const { rows: existingRows } = await executeQuery(
       'SELECT id FROM restaurants WHERE email = ?',
       [email]
@@ -45,19 +56,33 @@ const registerRestaurant = async (req, res) => {
     if (existingRows.length > 0) {
       return res.status(409).json({
         success: false,
-        message: 'Email already registered'
+        message: 'Email already registered as restaurant'
+      });
+    }
+
+    // Verificar si el email ya existe en registered_users
+    const { rows: userRows } = await executeQuery(
+      'SELECT id FROM registered_users WHERE email = ?',
+      [email]
+    );
+
+    if (userRows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'Email already registered as user. Please use user login.'
       });
     }
 
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+    const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
     
     // Generar ID y slug únicos
     const restaurantId = uuidv4();
-    const slug = createSlug(name);
+    const baseSlug = createSlug(name);
     
     // Verificar que el slug sea único
-    let finalSlug = slug;
+    let finalSlug = baseSlug;
     let counter = 1;
     
     while (true) {
@@ -68,53 +93,52 @@ const registerRestaurant = async (req, res) => {
       
       if (slugRows.length === 0) break;
       
-      finalSlug = `${slug}-${counter}`;
+      finalSlug = `${baseSlug}-${counter}`;
       counter++;
     }
 
-    // Crear restaurante con todos los nuevos campos
+    // Crear restaurante (activado automáticamente, sin verificación de email)
     await executeQuery(
       `INSERT INTO restaurants (
         id, name, owner_name, slug, email, password, phone, address, city, country,
-        website, description, cuisine_type, timezone, is_active
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        website, description, cuisine_type, timezone, is_active, verified, pending_approval, verification_token
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        restaurantId, 
-        name, 
-        ownerName || null, 
-        finalSlug, 
-        email, 
-        hashedPassword, 
-        phone || null, 
-        address || null, 
-        city || null, 
-        country || null,
+        restaurantId,
+        name,
+        ownerName || null,
+        finalSlug,
+        email,
+        hashedPassword,
+        phone || null,
+        address || null,
+        city || null,
+        country || 'Colombia',
         website || null,
         description || null,
         cuisineType || null,
         'America/Bogota',
-        true
+        true,
+        true, // verified = true (sin verificación requerida)
+        true, // pending_approval (revisión manual si se desea)
+        null // verification_token no usado
       ]
     );
 
-    // Generar QR code
+    // Generar QR code (opcional)
     let qrCodePath = null;
     try {
-      qrCodePath = await generateQRCode(restaurantId, finalSlug);
-      // Actualizar el path del QR en la base de datos
-      await executeQuery(
-        'UPDATE restaurants SET logo = ? WHERE id = ?',
-        [qrCodePath, restaurantId]
-      );
+      if (typeof generateQRCode === 'function') {
+        qrCodePath = await generateQRCode(restaurantId, finalSlug);
+        if (qrCodePath) {
+          await executeQuery(
+            'UPDATE restaurants SET logo = ? WHERE id = ?',
+            [qrCodePath, restaurantId]
+          );
+        }
+      }
     } catch (qrError) {
       logger.warn('QR code generation failed:', qrError.message);
-    }
-
-    // Enviar email de bienvenida (opcional)
-    try {
-      await sendWelcomeEmail(email, name, qrCodePath);
-    } catch (emailError) {
-      logger.warn('Welcome email failed to send:', emailError.message);
     }
 
     // Generar token
@@ -139,24 +163,30 @@ const registerRestaurant = async (req, res) => {
           phone: phone || null,
           address: address || null,
           city: city || null,
-          country: country || null,
+          country: country || 'Colombia',
           website: website || null,
           description: description || null,
           cuisineType: cuisineType || null,
           qrCode: qrCodePath,
           isActive: true,
-          verified: false
+          verified: true,
+          pendingApproval: true
         },
         access_token: token
       }
     });
 
   } catch (error) {
-    logger.error('Restaurant registration error:', error.message);
+    logger.error('Restaurant registration error:', {
+      message: error.message,
+      stack: error.stack,
+      body: req.body
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Registration failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
@@ -166,11 +196,19 @@ const loginRestaurant = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Buscar restaurante con todos los campos actualizados
+    // Validaciones básicas
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
+    // Buscar restaurante
     const { rows } = await executeQuery(
       `SELECT id, name, owner_name, slug, email, password, phone, city, country,
               website, description, cuisine_type, is_active, verified, last_login_at,
-              subscription_plan
+              subscription_plan, created_at
        FROM restaurants WHERE email = ?`,
       [email]
     );
@@ -202,6 +240,8 @@ const loginRestaurant = async (req, res) => {
       });
     }
 
+    // No requerir verificación de email - login directo
+
     // Actualizar último login
     await executeQuery(
       'UPDATE restaurants SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?',
@@ -215,8 +255,8 @@ const loginRestaurant = async (req, res) => {
       userType: 'restaurant'
     });
 
-    // Obtener QR code path
-    const qrCodePath = `/uploads/qr-codes/${restaurant.slug}-qr.png`;
+    // Construir QR code path
+    const qrCodePath = restaurant.logo || `/uploads/qr-codes/${restaurant.slug}-qr.png`;
 
     logger.info(`Restaurant login: ${restaurant.name} (${email})`);
 
@@ -238,18 +278,24 @@ const loginRestaurant = async (req, res) => {
           cuisineType: restaurant.cuisine_type,
           subscriptionPlan: restaurant.subscription_plan,
           verified: restaurant.verified,
-          qrCode: qrCodePath
+          qrCode: qrCodePath,
+          createdAt: restaurant.created_at
         },
         access_token: token
       }
     });
 
   } catch (error) {
-    logger.error('Restaurant login error:', error.message);
+    logger.error('Restaurant login error:', {
+      message: error.message,
+      stack: error.stack,
+      email: req.body?.email
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Login failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
@@ -271,7 +317,15 @@ const registerUser = async (req, res) => {
       preferredLanguages
     } = req.body;
 
-    // Verificar si el email ya existe
+    // Validaciones básicas
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email and password are required'
+      });
+    }
+
+    // Verificar si el email ya existe en users
     const { rows: existingRows } = await executeQuery(
       'SELECT id FROM registered_users WHERE email = ?',
       [email]
@@ -280,20 +334,34 @@ const registerUser = async (req, res) => {
     if (existingRows.length > 0) {
       return res.status(409).json({
         success: false,
-        message: 'Email already registered'
+        message: 'Email already registered as user'
+      });
+    }
+
+    // Verificar si el email ya existe en restaurants
+    const { rows: restaurantRows } = await executeQuery(
+      'SELECT id FROM restaurants WHERE email = ?',
+      [email]
+    );
+
+    if (restaurantRows.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'Email already registered as restaurant. Please use restaurant login.'
       });
     }
 
     // Hash password
-    const hashedPassword = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+    const saltRounds = parseInt(process.env.BCRYPT_ROUNDS) || 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
     const userId = uuidv4();
 
-    // Crear usuario registrado
+    // Crear usuario registrado (activado automáticamente, sin verificación de email)
     await executeQuery(
       `INSERT INTO registered_users (
-        id, name, email, password, phone, date_of_birth, 
-        preferred_genres, preferred_languages, is_active, email_verified
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, name, email, password, phone, date_of_birth,
+        preferred_genres, preferred_languages, is_active, email_verified, verification_token
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         userId,
         name,
@@ -304,7 +372,8 @@ const registerUser = async (req, res) => {
         JSON.stringify(preferredGenres || []),
         JSON.stringify(preferredLanguages || ['es']),
         true,
-        false
+        true, // email_verified = true (sin verificación requerida)
+        null // verification_token no usado
       ]
     );
 
@@ -330,18 +399,23 @@ const registerUser = async (req, res) => {
           preferredGenres: preferredGenres || [],
           preferredLanguages: preferredLanguages || ['es'],
           isPremium: false,
-          emailVerified: false
+          emailVerified: true
         },
         access_token: token
       }
     });
 
   } catch (error) {
-    logger.error('User registration error:', error.message);
+    logger.error('User registration error:', {
+      message: error.message,
+      stack: error.stack,
+      body: req.body
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Registration failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
@@ -351,11 +425,19 @@ const loginUser = async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    // Validaciones básicas
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
     // Buscar usuario registrado
     const { rows } = await executeQuery(
       `SELECT id, name, email, password, phone, preferred_genres, 
               preferred_languages, is_active, is_premium, email_verified,
-              theme_preference, privacy_level
+              theme_preference, privacy_level, created_at
        FROM registered_users WHERE email = ?`,
       [email]
     );
@@ -386,6 +468,8 @@ const loginUser = async (req, res) => {
       });
     }
 
+    // No requerir verificación de email - login directo
+
     // Actualizar último login
     await executeQuery(
       'UPDATE registered_users SET last_login_at = CURRENT_TIMESTAMP, login_count = login_count + 1 WHERE id = ?',
@@ -415,27 +499,40 @@ const loginUser = async (req, res) => {
           isPremium: user.is_premium,
           emailVerified: user.email_verified,
           themePreference: user.theme_preference,
-          privacyLevel: user.privacy_level
+          privacyLevel: user.privacy_level,
+          createdAt: user.created_at
         },
         access_token: token
       }
     });
 
   } catch (error) {
-    logger.error('User login error:', error.message);
+    logger.error('User login error:', {
+      message: error.message,
+      stack: error.stack,
+      email: req.body?.email
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Login failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
 
-// Crear sesión de usuario temporal (mesa) - ACTUALIZADO
+// Crear sesión de usuario temporal (mesa)
 const createUserSession = async (req, res) => {
   try {
     const { restaurantSlug } = req.params;
     const { tableNumber, registeredUserId } = req.body;
+
+    if (!restaurantSlug) {
+      return res.status(400).json({
+        success: false,
+        message: 'Restaurant slug is required'
+      });
+    }
 
     // Buscar restaurante
     const { rows: restaurantRows } = await executeQuery(
@@ -460,7 +557,6 @@ const createUserSession = async (req, res) => {
     let userName = null;
     
     if (registeredUserId) {
-      // Verificar que el usuario registrado existe
       const { rows: regUserRows } = await executeQuery(
         'SELECT id, name FROM registered_users WHERE id = ? AND is_active = true',
         [registeredUserId]
@@ -472,7 +568,7 @@ const createUserSession = async (req, res) => {
       }
     }
 
-    // Crear usuario temporal con referencia al usuario registrado si aplica
+    // Crear usuario temporal
     await executeQuery(
       `INSERT INTO users (
         id, registered_user_id, user_type, restaurant_id, table_number, 
@@ -501,6 +597,8 @@ const createUserSession = async (req, res) => {
       registeredUserId: registeredUserId || null
     });
 
+    logger.info(`User session created: ${userId} at ${restaurant.name}`);
+
     res.json({
       success: true,
       message: 'User session created',
@@ -520,11 +618,17 @@ const createUserSession = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error('User session creation error:', error.message);
+    logger.error('User session creation error:', {
+      message: error.message,
+      stack: error.stack,
+      params: req.params,
+      body: req.body
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Failed to create session',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
@@ -533,13 +637,19 @@ const createUserSession = async (req, res) => {
 // PROFILE MANAGEMENT
 // =============================
 
-// Obtener perfil del usuario autenticado - ACTUALIZADO
+// Obtener perfil del usuario autenticado
 const getProfile = async (req, res) => {
   try {
     const { user } = req;
 
+    if (!user || !user.type) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
     if (user.type === 'restaurant') {
-      // Obtener datos completos del restaurante
       const { rows } = await executeQuery(
         `SELECT id, name, owner_name, slug, email, phone, address, city, country, 
                 website, description, cuisine_type, price_range, rating, total_reviews,
@@ -557,32 +667,19 @@ const getProfile = async (req, res) => {
       }
 
       const restaurant = rows[0];
-      const qrCodePath = `/uploads/qr-codes/${restaurant.slug}-qr.png`;
-
-      // Obtener estadísticas actualizadas
-      const { rows: statsRows } = await executeQuery(
-        `SELECT 
-          (SELECT COUNT(*) FROM songs WHERE restaurant_id = ? AND is_active = true) as total_songs,
-          (SELECT COUNT(*) FROM requests WHERE restaurant_id = ? AND status = 'pending') as pending_requests,
-          (SELECT COUNT(*) FROM users WHERE restaurant_id = ? AND DATE(created_at) = CURDATE()) as today_users,
-          (SELECT COUNT(*) FROM restaurant_reviews WHERE restaurant_id = ?) as total_reviews
-        `,
-        [user.id, user.id, user.id, user.id]
-      );
+      const qrCodePath = restaurant.logo || `/uploads/qr-codes/${restaurant.slug}-qr.png`;
 
       res.json({
         success: true,
         data: {
           restaurant: {
             ...restaurant,
-            qrCode: qrCodePath,
-            stats: statsRows[0] || {}
+            qrCode: qrCodePath
           }
         }
       });
 
     } else if (user.type === 'registered_user') {
-      // Obtener datos del usuario registrado
       const { rows } = await executeQuery(
         `SELECT id, name, email, phone, avatar, bio, date_of_birth,
                 preferred_genres, preferred_languages, theme_preference, 
@@ -601,34 +698,18 @@ const getProfile = async (req, res) => {
 
       const userData = rows[0];
 
-      // Obtener estadísticas del usuario
-      const { rows: userStatsRows } = await executeQuery(
-        `SELECT 
-          COUNT(DISTINCT f.id) as total_favorites,
-          COUNT(DISTINCT p.id) as total_playlists,
-          COUNT(DISTINCT lh.id) as total_listening_history
-         FROM registered_users ru
-         LEFT JOIN favorites f ON ru.id = f.registered_user_id
-         LEFT JOIN playlists p ON ru.id = p.registered_user_id  
-         LEFT JOIN listening_history lh ON ru.id = lh.registered_user_id
-         WHERE ru.id = ?`,
-        [user.id]
-      );
-
       res.json({
         success: true,
         data: {
           user: {
             ...userData,
             preferredGenres: JSON.parse(userData.preferred_genres || '[]'),
-            preferredLanguages: JSON.parse(userData.preferred_languages || '["es"]'),
-            stats: userStatsRows[0] || {}
+            preferredLanguages: JSON.parse(userData.preferred_languages || '["es"]')
           }
         }
       });
 
     } else if (user.type === 'user') {
-      // Usuario temporal
       const { rows } = await executeQuery(
         `SELECT u.*, r.name as restaurant_name,
                 ru.name as registered_user_name, ru.email as registered_user_email
@@ -655,72 +736,108 @@ const getProfile = async (req, res) => {
     }
 
   } catch (error) {
-    logger.error('Get profile error:', error.message);
+    logger.error('Get profile error:', {
+      message: error.message,
+      stack: error.stack,
+      userId: req.user?.id
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Failed to get profile',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
 
-// Actualizar perfil de restaurante - ACTUALIZADO
-const updateRestaurantProfile = async (req, res) => {
+// Actualizar perfil
+const updateProfile = async (req, res) => {
   try {
     const { user } = req;
-    const { 
-      name, 
-      ownerName, 
-      phone, 
-      address, 
-      city, 
-      country, 
-      website,
-      description,
-      cuisineType,
-      priceRange,
-      timezone,
-      maxRequestsPerUser, 
-      queueLimit, 
-      autoPlay, 
-      allowExplicit 
-    } = req.body;
 
-    if (user.type !== 'restaurant') {
-      return res.status(403).json({
+    if (!user || !user.type) {
+      return res.status(401).json({
         success: false,
-        message: 'Restaurant access required'
+        message: 'User not authenticated'
       });
     }
 
-    // Actualizar restaurante con campos nuevos
-    await executeQuery(
-      `UPDATE restaurants 
-       SET name = COALESCE(?, name),
-           owner_name = COALESCE(?, owner_name),
-           phone = COALESCE(?, phone),
-           address = COALESCE(?, address),
-           city = COALESCE(?, city),
-           country = COALESCE(?, country),
-           website = COALESCE(?, website),
-           description = COALESCE(?, description),
-           cuisine_type = COALESCE(?, cuisine_type),
-           price_range = COALESCE(?, price_range),
-           timezone = COALESCE(?, timezone),
-           max_requests_per_user = COALESCE(?, max_requests_per_user),
-           queue_limit = COALESCE(?, queue_limit),
-           auto_play = COALESCE(?, auto_play),
-           allow_explicit = COALESCE(?, allow_explicit),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`,
-      [
-        name, ownerName, phone, address, city, country, website, description,
-        cuisineType, priceRange, timezone, maxRequestsPerUser, queueLimit, 
-        autoPlay, allowExplicit, user.id
-      ]
-    );
+    if (user.type === 'restaurant') {
+      const { 
+        name, 
+        ownerName, 
+        phone, 
+        address, 
+        city, 
+        country, 
+        website,
+        description,
+        cuisineType,
+        maxRequestsPerUser, 
+        queueLimit, 
+        autoPlay, 
+        allowExplicit 
+      } = req.body;
 
-    logger.info(`Restaurant profile updated: ${user.id}`);
+      await executeQuery(
+        `UPDATE restaurants 
+         SET name = COALESCE(?, name),
+             owner_name = COALESCE(?, owner_name),
+             phone = COALESCE(?, phone),
+             address = COALESCE(?, address),
+             city = COALESCE(?, city),
+             country = COALESCE(?, country),
+             website = COALESCE(?, website),
+             description = COALESCE(?, description),
+             cuisine_type = COALESCE(?, cuisine_type),
+             max_requests_per_user = COALESCE(?, max_requests_per_user),
+             queue_limit = COALESCE(?, queue_limit),
+             auto_play = COALESCE(?, auto_play),
+             allow_explicit = COALESCE(?, allow_explicit),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [
+          name, ownerName, phone, address, city, country, website, description,
+          cuisineType, maxRequestsPerUser, queueLimit, autoPlay, allowExplicit, 
+          user.id
+        ]
+      );
+
+      logger.info(`Restaurant profile updated: ${user.id}`);
+
+    } else if (user.type === 'registered_user') {
+      const { 
+        name, 
+        phone, 
+        bio,
+        preferredGenres,
+        preferredLanguages,
+        themePreference,
+        privacyLevel
+      } = req.body;
+
+      await executeQuery(
+        `UPDATE registered_users 
+         SET name = COALESCE(?, name),
+             phone = COALESCE(?, phone),
+             bio = COALESCE(?, bio),
+             preferred_genres = COALESCE(?, preferred_genres),
+             preferred_languages = COALESCE(?, preferred_languages),
+             theme_preference = COALESCE(?, theme_preference),
+             privacy_level = COALESCE(?, privacy_level),
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [
+          name, phone, bio,
+          preferredGenres ? JSON.stringify(preferredGenres) : null,
+          preferredLanguages ? JSON.stringify(preferredLanguages) : null,
+          themePreference, privacyLevel,
+          user.id
+        ]
+      );
+
+      logger.info(`User profile updated: ${user.id}`);
+    }
 
     res.json({
       success: true,
@@ -728,11 +845,16 @@ const updateRestaurantProfile = async (req, res) => {
     });
 
   } catch (error) {
-    logger.error('Update restaurant profile error:', error.message);
+    logger.error('Update profile error:', {
+      message: error.message,
+      stack: error.stack,
+      userId: req.user?.id
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Failed to update profile',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
@@ -755,7 +877,11 @@ const verifyToken = async (req, res) => {
       }
     });
   } catch (error) {
-    logger.error('Token verification error:', error.message);
+    logger.error('Token verification error:', {
+      message: error.message,
+      stack: error.stack
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Token verification failed'
@@ -770,6 +896,6 @@ module.exports = {
   loginUser,
   createUserSession,
   getProfile,
-  updateRestaurantProfile,
+  updateProfile,
   verifyToken
 };

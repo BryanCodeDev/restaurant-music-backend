@@ -1,4 +1,4 @@
-// src/routes/auth.js - FIXED WITH ALL ENDPOINTS
+// src/routes/auth.js - CORREGIDO
 const express = require('express');
 const { body } = require('express-validator');
 const { validate } = require('../middleware/validation');
@@ -10,7 +10,7 @@ const {
   loginUser,
   createUserSession,
   getProfile,
-  updateRestaurantProfile,
+  updateProfile,
   verifyToken
 } = require('../controllers/authController');
 
@@ -72,8 +72,8 @@ const restaurantRegisterValidation = [
   body('description')
     .optional()
     .trim()
-    .isLength({ max: 500 })
-    .withMessage('Description must not exceed 500 characters')
+    .isLength({ max: 1000 }) // CORREGIDO: aumentado límite
+    .withMessage('Description must not exceed 1000 characters')
 ];
 
 const restaurantLoginValidation = [
@@ -142,10 +142,51 @@ const updateProfileValidation = [
     .isLength({ min: 2, max: 255 })
     .withMessage('Name must be between 2 and 255 characters'),
     
+  body('ownerName') // AGREGADO
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage('Owner name must be between 2 and 100 characters'),
+    
   body('phone')
     .optional()
     .isMobilePhone('any')
     .withMessage('Please provide a valid phone number'),
+    
+  body('address') // AGREGADO
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Address must not exceed 500 characters'),
+    
+  body('city') // AGREGADO
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('City must not exceed 100 characters'),
+    
+  body('country') // AGREGADO
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('Country must not exceed 100 characters'),
+    
+  body('website') // AGREGADO
+    .optional()
+    .isURL()
+    .withMessage('Website must be a valid URL'),
+    
+  body('description') // AGREGADO
+    .optional()
+    .trim()
+    .isLength({ max: 1000 })
+    .withMessage('Description must not exceed 1000 characters'),
+    
+  body('cuisineType') // AGREGADO
+    .optional()
+    .trim()
+    .isLength({ max: 100 })
+    .withMessage('Cuisine type must not exceed 100 characters'),
     
   body('maxRequestsPerUser')
     .optional()
@@ -165,7 +206,34 @@ const updateProfileValidation = [
   body('allowExplicit')
     .optional()
     .isBoolean()
-    .withMessage('Allow explicit must be a boolean value')
+    .withMessage('Allow explicit must be a boolean value'),
+
+  // AGREGADO: Validaciones para usuarios registrados
+  body('bio')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Bio must not exceed 500 characters'),
+    
+  body('preferredGenres')
+    .optional()
+    .isArray()
+    .withMessage('Preferred genres must be an array'),
+    
+  body('preferredLanguages')
+    .optional()
+    .isArray()
+    .withMessage('Preferred languages must be an array'),
+    
+  body('themePreference')
+    .optional()
+    .isIn(['light', 'dark', 'auto'])
+    .withMessage('Theme preference must be light, dark, or auto'),
+    
+  body('privacyLevel')
+    .optional()
+    .isIn(['public', 'friends', 'private'])
+    .withMessage('Privacy level must be public, friends, or private')
 ];
 
 const userSessionValidation = [
@@ -193,6 +261,7 @@ router.post('/login-restaurant', restaurantLoginValidation, validate, loginResta
 router.post('/register-user', userRegisterValidation, validate, registerUser);
 router.post('/login-user', userLoginValidation, validate, loginUser);
 
+
 // Session routes
 router.post('/session/:restaurantSlug', userSessionValidation, validate, createUserSession);
 
@@ -207,8 +276,8 @@ router.post('/login', restaurantLoginValidation, validate, loginRestaurant);
 // Profile routes
 router.get('/profile', authenticateToken, getProfile);
 router.get('/profile-user', authenticateToken, getProfile); // Alias for registered users
-router.put('/profile', authenticateToken, updateProfileValidation, validate, updateRestaurantProfile);
-router.put('/profile-user', authenticateToken, updateProfileValidation, validate, updateRestaurantProfile);
+router.put('/profile', authenticateToken, updateProfileValidation, validate, updateProfile);
+router.put('/profile-user', authenticateToken, updateProfileValidation, validate, updateProfile);
 
 // Token verification
 router.get('/verify', authenticateToken, verifyToken);
