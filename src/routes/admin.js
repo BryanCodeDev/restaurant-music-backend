@@ -6,12 +6,11 @@ const { authenticateToken, requireSuperAdmin } = require('../middleware/auth');
 const {
   getPendingRestaurants,
   approveRestaurant,
-  rejectRestaurant,
-  getAllSubscriptions,
-  approveSubscription,
-  rejectSubscription,
-  getGlobalStats
+  rejectRestaurant
 } = require('../controllers/adminController');
+const subscriptionController = require('../controllers/subscriptionController');
+const adminStatsController = require('../controllers/adminStatsController');
+const { getGlobalStats } = require('../controllers/adminController');
 
 const router = express.Router();
 
@@ -89,7 +88,17 @@ router.get('/subscriptions',
   requireSuperAdmin,
   getSubscriptionsValidation,
   validate,
-  getAllSubscriptions
+  subscriptionController.getPendingSubscriptions
+);
+
+router.get('/subscriptions/:id',
+  authenticateToken,
+  requireSuperAdmin,
+  param('id')
+    .notEmpty()
+    .withMessage('Subscription ID is required'),
+  validate,
+  subscriptionController.getSubscriptionById
 );
 
 router.put('/subscriptions/:id/approve',
@@ -100,7 +109,7 @@ router.put('/subscriptions/:id/approve',
     .withMessage('Subscription ID is required'),
   subscriptionApprovalValidation,
   validate,
-  approveSubscription
+  subscriptionController.approveSubscription
 );
 
 router.put('/subscriptions/:id/reject',
@@ -111,7 +120,55 @@ router.put('/subscriptions/:id/reject',
     .withMessage('Subscription ID is required'),
   subscriptionRejectionValidation,
   validate,
-  rejectSubscription
+  subscriptionController.rejectSubscription
+);
+
+// Rutas de estadísticas del admin
+router.get('/stats/global',
+  authenticateToken,
+  requireSuperAdmin,
+  adminStatsController.getGlobalStats
+);
+
+router.get('/stats/subscriptions',
+  authenticateToken,
+  requireSuperAdmin,
+  query('period')
+    .optional()
+    .isIn(['day', 'week', 'month', 'year'])
+    .withMessage('Period must be day, week, month, or year'),
+  query('planId')
+    .optional()
+    .isString()
+    .withMessage('Plan ID must be a string'),
+  validate,
+  adminStatsController.getSubscriptionStatsByPeriod
+);
+
+router.get('/stats/activity',
+  authenticateToken,
+  requireSuperAdmin,
+  query('days')
+    .optional()
+    .isInt({ min: 1, max: 365 })
+    .withMessage('Days must be between 1 and 365'),
+  validate,
+  adminStatsController.getActivityStats
+);
+
+router.get('/logs/activity',
+  authenticateToken,
+  requireSuperAdmin,
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 200 })
+    .withMessage('Limit must be between 1 and 200'),
+  query('action')
+    .optional()
+    .isIn(['created', 'approved', 'rejected', 'activated', 'expired', 'cancelled'])
+    .withMessage('Action must be a valid subscription action'),
+  validate,
+  adminStatsController.getRecentActivityLogs
 );
 
 module.exports = router;
