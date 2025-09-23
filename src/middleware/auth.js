@@ -225,10 +225,49 @@ const requireSuperAdmin = (req, res, next) => {
   }
 };
 
+  // Middleware específico para restaurantes
+  const restaurantAuth = async (req, res, next) => {
+    if (req.user && req.user.type === 'restaurant') {
+      next();
+    } else {
+      res.status(403).json({
+        success: false,
+        message: 'Acceso denegado. Se requiere cuenta de restaurante.'
+      });
+    }
+  };
+
+  // Middleware específico para superadmin
+  const superAdminAuth = async (req, res, next) => {
+    if (req.user && req.user.type === 'registered_user' && req.user.role === 'superadmin') {
+      next();
+    } else {
+      res.status(403).json({
+        success: false,
+        message: 'Acceso denegado. Se requiere cuenta de superadmin.'
+      });
+    }
+  };
+
+  // Middleware para verificar que sea el propietario del restaurante
+  const requireRestaurantOwner = async (req, res, next) => {
+    if (req.user && req.user.type === 'restaurant' && req.user.id === req.params.id) {
+      next();
+    } else {
+      res.status(403).json({
+        success: false,
+        message: 'Acceso denegado. Solo el propietario puede realizar esta acción.'
+      });
+    }
+  };
+
 module.exports = {
   authenticateToken,
   requireRestaurant,
   requireRegisteredUser,
   optionalAuth,
-  requireSuperAdmin
+  requireSuperAdmin,
+  restaurantAuth,
+  superAdminAuth,
+  requireRestaurantOwner
 };

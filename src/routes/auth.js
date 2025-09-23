@@ -11,7 +11,9 @@ const {
   createUserSession,
   getProfile,
   updateProfile,
-  verifyToken
+  verifyToken,
+  login,
+  getProfileUnified
 } = require('../controllers/authController');
 
 const router = express.Router();
@@ -281,5 +283,16 @@ router.put('/profile-user', authenticateToken, updateProfileValidation, validate
 
 // Token verification
 router.get('/verify', authenticateToken, verifyToken);
+
+// =============================
+// RUTAS UNIFICADAS
+// =============================
+
+// Login unificado
+router.post('/login', login);
+
+// Perfil unificado
+router.get('/profile', authenticateToken, getProfileUnified);
+router.put('/profile', authenticateToken, updateProfile);
 
 module.exports = router;

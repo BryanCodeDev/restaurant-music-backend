@@ -7,6 +7,8 @@ const { generateQRCode } = require('../services/qrService');
 const { sendWelcomeEmail, sendVerificationEmail } = require('../services/emailService');
 const { createSlug } = require('../utils/helpers');
 const { logger } = require('../utils/logger');
+const Restaurant = require('../models/Restaurant');
+const User = require('../models/User');
 
 // Función helper segura para parsear JSON con fallback
 const safeJsonParse = (str, fallback) => {
@@ -906,6 +908,158 @@ const verifyToken = async (req, res) => {
   }
 };
 
+  // =============================
+  // ENDPOINTS UNIFICADOS
+  // =============================
+
+  // Endpoint unificado de login
+  const login = async (req, res) => {
+    try {
+      const { email, password, userType } = req.body;
+
+      let user;
+      let token;
+
+      switch (userType) {
+        case 'restaurant':
+          // Login de restaurante
+          user = await Restaurant.findByEmail(email);
+          if (!user || !await bcrypt.compare(password, user.password)) {
+            return res.status(401).json({
+              success: false,
+              message: 'Credenciales inválidas'
+            });
+          }
+          token = jwt.sign(
+            { id: user.id, type: 'restaurant' },
+            process.env.JWT_SECRET
+          );
+          break;
+
+        case 'superadmin':
+          // Login de superadmin
+          user = await User.findOne({
+            where: { email, role: 'superadmin' }
+          });
+          if (!user || !await bcrypt.compare(password, user.password)) {
+            return res.status(401).json({
+              success: false,
+              message: 'Credenciales inválidas'
+            });
+          }
+          token = jwt.sign(
+            { id: user.id, type: 'superadmin' },
+            process.env.JWT_SECRET
+          );
+          break;
+
+        default:
+          // Login de usuario regular
+          user = await User.findOne({ where: { email } });
+          if (!user || !await bcrypt.compare(password, user.password)) {
+            return res.status(401).json({
+              success: false,
+              message: 'Credenciales inválidas'
+            });
+          }
+          token = jwt.sign(
+            { id: user.id, type: 'user' },
+            process.env.JWT_SECRET
+          );
+      }
+
+      // Obtener perfil completo
+      const profile = await getProfileData(user, userType);
+
+      res.json({
+        success: true,
+        data: {
+          user: profile,
+          token,
+          refreshToken: generateRefreshToken(user.id, userType)
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Error en login',
+        error: error.message
+      });
+    }
+  };
+
+  // Endpoint unificado de perfil
+  const getProfileUnified = async (req, res) => {
+    try {
+      const token = req.headers.authorization?.replace('Bearer ', '');
+      if (!token) {
+        return res.status(401).json({
+          success: false,
+          message: 'Token requerido'
+        });
+      }
+
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const profile = await getProfileData(decoded);
+
+      res.json({ success: true, data: profile });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Error al obtener perfil',
+        error: error.message
+      });
+    }
+  };
+
+  // Función helper para obtener datos de perfil
+  const getProfileData = async (user, userType) => {
+    try {
+      switch (userType) {
+        case 'restaurant':
+          return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            type: 'restaurant',
+            subscriptionPlan: user.subscriptionPlan,
+            subscriptionPlanId: user.subscriptionPlanId,
+            subscriptionStatus: user.subscriptionStatus,
+            isActive: user.isActive
+          };
+
+        case 'superadmin':
+          return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            type: 'superadmin',
+            role: user.role
+          };
+
+        default:
+          return {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            type: 'user',
+            role: user.role
+          };
+      }
+    } catch (error) {
+      throw new Error(`Error getting profile data: ${error.message}`);
+    }
+  };
+
+  // Función helper para generar refresh token
+  const generateRefreshToken = (userId, userType) => {
+    return jwt.sign(
+      { id: userId, type: userType },
+      process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+  };
+
 module.exports = {
   registerRestaurant,
   loginRestaurant,
@@ -914,5 +1068,7 @@ module.exports = {
   createUserSession,
   getProfile,
   updateProfile,
-  verifyToken
+  verifyToken,
+  login,
+  getProfileUnified
 };
