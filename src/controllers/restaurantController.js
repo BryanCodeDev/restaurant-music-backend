@@ -24,40 +24,37 @@ const getPricing = (req, res) => {
       recommended: false
     },
     {
-      id: 'professional',
-      name: 'Professional',
-      description: 'Ideal para restaurantes establecidos',
-      price: 120000,
+      id: 'premium',
+      name: 'Premium',
+      description: 'Acceso completo a Spotify + canciones locales. Experiencia musical profesional.',
+      price: 50000,
       currency: 'COP',
       billingCycle: 'Mensual',
       features: [
-        'Mesas ilimitadas',
-        'Cola musical avanzada',
-        '10,000 peticiones/mes',
-        'Soporte prioritario 24/7',
-        'Analytics completos',
-        'Personalización completa',
-        'Integración con Spotify',
-        'Control de contenido'
+        'Búsqueda en Spotify Premium',
+        'Reproducción en tiempo real',
+        'Canciones locales + Spotify',
+        'Estadísticas avanzadas',
+        'Soporte prioritario',
+        'Múltiples dispositivos'
       ],
       recommended: true
     },
     {
       id: 'enterprise',
       name: 'Enterprise',
-      description: 'Para cadenas y grandes establecimientos',
-      price: 300000,
+      description: 'Solución completa para cadenas de restaurantes con features avanzadas.',
+      price: 200000,
       currency: 'COP',
       billingCycle: 'Mensual',
       features: [
-        'Todo lo de Professional',
-        'Múltiples ubicaciones',
-        'Peticiones ilimitadas',
-        'Soporte dedicado',
-        'API completa',
-        'White-label',
-        'Integración personalizada',
-        'SLA garantizado'
+        'Todo en Premium + Analytics',
+        'Gestión multi-restaurante',
+        'Reportes personalizados',
+        'Integración API personal',
+        'Soporte 24/7',
+        'Usuarios ilimitados',
+        'Branding personalizado'
       ],
       recommended: false
     }
@@ -237,8 +234,8 @@ const getRestaurantSettings = async (req, res) => {
     const { rows } = await executeQuery(
       `SELECT name, phone, address, city, country, timezone,
               max_requests_per_user, queue_limit, auto_play, allow_explicit,
-              subscription_plan_id, subscription_status
-       FROM restaurants
+              subscription_plan
+       FROM restaurants 
        WHERE id = ?`,
       [user.id]
     );
@@ -386,7 +383,7 @@ const getPublicRestaurants = async (req, res) => {
     const { rows: restaurants } = await executeQuery(
       `SELECT
         id, name, slug, email, phone, address, city, country,
-        subscription_plan_id, subscription_status, is_active, created_at, updated_at
+        subscription_plan, is_active, created_at, updated_at
       FROM restaurants
       WHERE ${whereClause}
       ORDER BY is_active DESC, name ASC
@@ -444,7 +441,7 @@ const getPublicRestaurants = async (req, res) => {
             address: restaurant.address,
             city: restaurant.city,
             country: restaurant.country,
-            subscriptionPlan: restaurant.subscription_plan_id,
+            subscriptionPlan: restaurant.subscription_plan,
             isActive: restaurant.is_active,
             
             // Datos enriquecidos
@@ -477,7 +474,7 @@ const getPublicRestaurants = async (req, res) => {
           // Retornar datos básicos si hay error
           return {
             ...restaurant,
-            subscriptionPlan: restaurant.subscription_plan_id,
+            subscriptionPlan: restaurant.subscription_plan,
             totalSongs: 0,
             queueLength: 0,
             activeCustomers: 0,
