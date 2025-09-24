@@ -12,6 +12,8 @@ const ListeningHistory = require('./ListeningHistory');
 const RestaurantReview = require('./RestaurantReview');
 const AuthToken = require('./AuthToken');
 const SpotifyToken = require('./SpotifyToken');
+const ActivityLog = require('./ActivityLog');
+const RestaurantSettings = require('./RestaurantSettings');
 
 module.exports = {
   SubscriptionPlan,
@@ -26,5 +28,7 @@ module.exports = {
   ListeningHistory,
   RestaurantReview,
   AuthToken,
-  SpotifyToken
+  SpotifyToken,
+  ActivityLog,
+  RestaurantSettings
 };

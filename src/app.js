@@ -14,6 +14,8 @@ const songRoutes = require('./routes/songs');
 const requestRoutes = require('./routes/requests');
 const favoriteRoutes = require('./routes/favorites');
 const spotifyRoutes = require('./routes/spotify');
+const playlistRoutes = require('./routes/playlists');
+const reviewRoutes = require('./routes/reviews');
 
 const app = express();
 
@@ -109,6 +111,8 @@ apiRouter.use('/songs', songRoutes);
 apiRouter.use('/requests', requestRoutes);
 apiRouter.use('/favorites', favoriteRoutes);
 apiRouter.use('/spotify', spotifyRoutes);
+apiRouter.use('/playlists', playlistRoutes);
+apiRouter.use('/reviews', reviewRoutes);
 
 // Mount API router
 app.use('/api/v1', apiRouter);

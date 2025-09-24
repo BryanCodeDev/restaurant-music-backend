@@ -32,8 +32,13 @@ class Restaurant {
     this.autoPlay = data.auto_play;
     this.allowExplicit = data.allow_explicit;
     this.isActive = data.is_active;
-    this.subscriptionPlan = data.subscription_plan;
-    this.planType = data.subscription_plan || 'basic';
+    this.subscriptionPlanId = data.subscription_plan_id;
+    this.subscriptionStatus = data.subscription_status;
+    this.subscriptionStartDate = data.subscription_start_date;
+    this.subscriptionEndDate = data.subscription_end_date;
+    this.subscriptionPaymentProof = data.subscription_payment_proof;
+    this.subscriptionPlan = data.subscription_plan_name || 'starter';
+    this.planType = data.subscription_plan_name || 'starter';
     this.lastLoginAt = data.last_login_at;
     this.settings = data.settings ? JSON.parse(data.settings) : {};
     this.createdAt = data.created_at;
@@ -44,15 +49,19 @@ class Restaurant {
   static async findById(id) {
     try {
       const { rows } = await executeQuery(
-        `SELECT id, name, owner_name, slug, email, password, phone, address, city, country,
-                logo, cover_image, description, website, social_media, business_hours,
-                cuisine_type, price_range, rating, total_reviews, verified, verification_date,
-                timezone, max_requests_per_user, queue_limit, auto_play, allow_explicit,
-                is_active, subscription_plan, last_login_at, settings, created_at, updated_at
-         FROM restaurants WHERE id = ?`,
+        `SELECT r.id, r.name, r.owner_name, r.slug, r.email, r.password, r.phone, r.address, r.city, r.country,
+                r.logo, r.cover_image, r.description, r.website, r.social_media, r.business_hours,
+                r.cuisine_type, r.price_range, r.rating, r.total_reviews, r.verified, r.verification_date,
+                r.timezone, r.max_requests_per_user, r.queue_limit, r.auto_play, r.allow_explicit,
+                r.is_active, r.subscription_plan_id, r.subscription_status, r.subscription_start_date,
+                r.subscription_end_date, r.subscription_payment_proof, r.last_login_at, r.settings,
+                r.created_at, r.updated_at, sp.name as subscription_plan_name
+         FROM restaurants r
+         LEFT JOIN subscription_plans sp ON r.subscription_plan_id = sp.id
+         WHERE r.id = ?`,
         [id]
       );
-      
+
       return rows.length > 0 ? new Restaurant(rows[0]) : null;
     } catch (error) {
       throw new Error(`Error finding restaurant by ID: ${error.message}`);
@@ -63,15 +72,19 @@ class Restaurant {
   static async findBySlug(slug) {
     try {
       const { rows } = await executeQuery(
-        `SELECT id, name, owner_name, slug, email, phone, address, city, country,
-                logo, cover_image, description, website, social_media, business_hours,
-                cuisine_type, price_range, rating, total_reviews, verified, verification_date,
-                timezone, max_requests_per_user, queue_limit, auto_play, allow_explicit,
-                is_active, subscription_plan, last_login_at, settings, created_at, updated_at
-         FROM restaurants WHERE slug = ?`,
+        `SELECT r.id, r.name, r.owner_name, r.slug, r.email, r.phone, r.address, r.city, r.country,
+                r.logo, r.cover_image, r.description, r.website, r.social_media, r.business_hours,
+                r.cuisine_type, r.price_range, r.rating, r.total_reviews, r.verified, r.verification_date,
+                r.timezone, r.max_requests_per_user, r.queue_limit, r.auto_play, r.allow_explicit,
+                r.is_active, r.subscription_plan_id, r.subscription_status, r.subscription_start_date,
+                r.subscription_end_date, r.subscription_payment_proof, r.last_login_at, r.settings,
+                r.created_at, r.updated_at, sp.name as subscription_plan_name
+         FROM restaurants r
+         LEFT JOIN subscription_plans sp ON r.subscription_plan_id = sp.id
+         WHERE r.slug = ?`,
         [slug]
       );
-      
+
       return rows.length > 0 ? new Restaurant(rows[0]) : null;
     } catch (error) {
       throw new Error(`Error finding restaurant by slug: ${error.message}`);
@@ -130,7 +143,11 @@ class Restaurant {
         auto_play: data.autoPlay !== undefined ? data.autoPlay : true,
         allow_explicit: data.allowExplicit !== undefined ? data.allowExplicit : false,
         is_active: true,
-        subscription_plan: data.subscriptionPlan || 'free',
+        subscription_plan_id: data.subscriptionPlanId || 'starter',
+        subscription_status: data.subscriptionStatus || 'active',
+        subscription_start_date: data.subscriptionStartDate || new Date(),
+        subscription_end_date: data.subscriptionEndDate || null,
+        subscription_payment_proof: data.subscriptionPaymentProof || null,
         last_login_at: null,
         settings: JSON.stringify(data.settings || {})
       };
@@ -141,8 +158,9 @@ class Restaurant {
           logo, cover_image, description, website, social_media, business_hours,
           cuisine_type, price_range, rating, total_reviews, verified, verification_date,
           timezone, max_requests_per_user, queue_limit, auto_play, allow_explicit,
-          is_active, subscription_plan, last_login_at, settings
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          is_active, subscription_plan_id, subscription_status, subscription_start_date,
+          subscription_end_date, subscription_payment_proof, last_login_at, settings
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           restaurantData.id, restaurantData.name, restaurantData.owner_name, restaurantData.slug,
           restaurantData.email, restaurantData.password, restaurantData.phone,
@@ -153,7 +171,9 @@ class Restaurant {
           restaurantData.total_reviews, restaurantData.verified, restaurantData.verification_date,
           restaurantData.timezone, restaurantData.max_requests_per_user, restaurantData.queue_limit,
           restaurantData.auto_play, restaurantData.allow_explicit, restaurantData.is_active,
-          restaurantData.subscription_plan, restaurantData.last_login_at, restaurantData.settings
+          restaurantData.subscription_plan_id, restaurantData.subscription_status,
+          restaurantData.subscription_start_date, restaurantData.subscription_end_date,
+          restaurantData.subscription_payment_proof, restaurantData.last_login_at, restaurantData.settings
         ]
       );
 
@@ -193,7 +213,11 @@ class Restaurant {
         queueLimit: 'queue_limit',
         autoPlay: 'auto_play',
         allowExplicit: 'allow_explicit',
-        subscriptionPlan: 'subscription_plan',
+        subscriptionPlanId: 'subscription_plan_id',
+        subscriptionStatus: 'subscription_status',
+        subscriptionStartDate: 'subscription_start_date',
+        subscriptionEndDate: 'subscription_end_date',
+        subscriptionPaymentProof: 'subscription_payment_proof',
         lastLoginAt: 'last_login_at',
         settings: 'settings'
       };
@@ -378,7 +402,12 @@ class Restaurant {
       autoPlay: this.autoPlay,
       allowExplicit: this.allowExplicit,
       isActive: this.isActive,
+      subscriptionPlanId: this.subscriptionPlanId,
       subscriptionPlan: this.subscriptionPlan,
+      subscriptionStatus: this.subscriptionStatus,
+      subscriptionStartDate: this.subscriptionStartDate,
+      subscriptionEndDate: this.subscriptionEndDate,
+      subscriptionPaymentProof: this.subscriptionPaymentProof,
       lastLoginAt: this.lastLoginAt,
       settings: this.settings,
       qrCodeUrl: this.getQRCodeUrl(),

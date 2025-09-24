@@ -8,53 +8,56 @@ const { formatSuccessResponse, formatErrorResponse } = require('../utils/helpers
 const getPricing = (req, res) => {
   const pricingPlans = [
     {
-      id: 'free',
-      name: 'Básico',
-      description: 'Acceso a canciones locales de tu base de datos. Ideal para empezar.',
-      price: 0,
+      id: 'starter',
+      name: 'Starter',
+      description: 'Perfecto para comenzar',
+      price: 80000,
       currency: 'COP',
       billingCycle: 'Mensual',
       features: [
-        'Canciones locales ilimitadas',
-        'Gestión de cola básica',
-        'Estadísticas simples',
-        '1 usuario admin',
-        'Soporte básico'
+        'Hasta 50 mesas',
+        'Cola musical básica',
+        '1,000 peticiones/mes',
+        'Soporte por email',
+        'Estadísticas básicas'
       ],
       recommended: false
     },
     {
-      id: 'premium',
-      name: 'Premium',
-      description: 'Acceso completo a Spotify + canciones locales. Experiencia musical profesional.',
-      price: 50000,
+      id: 'professional',
+      name: 'Professional',
+      description: 'Ideal para restaurantes establecidos',
+      price: 120000,
       currency: 'COP',
       billingCycle: 'Mensual',
       features: [
-        'Búsqueda en Spotify Premium',
-        'Reproducción en tiempo real',
-        'Canciones locales + Spotify',
-        'Estadísticas avanzadas',
-        'Soporte prioritario',
-        'Múltiples dispositivos'
+        'Mesas ilimitadas',
+        'Cola musical avanzada',
+        '10,000 peticiones/mes',
+        'Soporte prioritario 24/7',
+        'Analytics completos',
+        'Personalización completa',
+        'Integración con Spotify',
+        'Control de contenido'
       ],
       recommended: true
     },
     {
       id: 'enterprise',
       name: 'Enterprise',
-      description: 'Solución completa para cadenas de restaurantes con features avanzadas.',
-      price: 200000,
+      description: 'Para cadenas y grandes establecimientos',
+      price: 300000,
       currency: 'COP',
       billingCycle: 'Mensual',
       features: [
-        'Todo en Premium + Analytics',
-        'Gestión multi-restaurante',
-        'Reportes personalizados',
-        'Integración API personal',
-        'Soporte 24/7',
-        'Usuarios ilimitados',
-        'Branding personalizado'
+        'Todo lo de Professional',
+        'Múltiples ubicaciones',
+        'Peticiones ilimitadas',
+        'Soporte dedicado',
+        'API completa',
+        'White-label',
+        'Integración personalizada',
+        'SLA garantizado'
       ],
       recommended: false
     }
@@ -69,10 +72,10 @@ const getRestaurantBySlug = async (req, res) => {
     const { slug } = req.params;
 
     const { rows } = await executeQuery(
-      `SELECT id, name, slug, phone, address, city, country, 
+      `SELECT id, name, slug, phone, address, city, country,
               max_requests_per_user, queue_limit, auto_play, allow_explicit,
               is_active, created_at
-       FROM restaurants 
+       FROM restaurants
        WHERE slug = ? AND is_active = true`,
       [slug]
     );
@@ -232,11 +235,12 @@ const getRestaurantSettings = async (req, res) => {
     }
 
     const { rows } = await executeQuery(
-      `SELECT name, phone, address, city, country, timezone,
-              max_requests_per_user, queue_limit, auto_play, allow_explicit,
-              subscription_plan
-       FROM restaurants 
-       WHERE id = ?`,
+      `SELECT r.name, r.phone, r.address, r.city, r.country, r.timezone,
+              r.max_requests_per_user, r.queue_limit, r.auto_play, r.allow_explicit,
+              r.subscription_plan_id, r.subscription_status, sp.name as subscription_plan_name
+       FROM restaurants r
+       LEFT JOIN subscription_plans sp ON r.subscription_plan_id = sp.id
+       WHERE r.id = ?`,
       [user.id]
     );
 
@@ -314,7 +318,7 @@ const updateRestaurantSettings = async (req, res) => {
            queue_limit = COALESCE(?, queue_limit),
            auto_play = COALESCE(?, auto_play),
            allow_explicit = COALESCE(?, allow_explicit),
-           subscription_plan = COALESCE(?, subscription_plan),
+           subscription_plan_id = COALESCE(?, subscription_plan_id),
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [
@@ -362,11 +366,11 @@ const getPublicRestaurants = async (req, res) => {
 
     // Filtro por estado activo (por defecto solo mostrar activos)
     if (isActive !== undefined) {
-      whereConditions.push('is_active = ?');
+      whereConditions.push('r.is_active = ?');
       queryParams.push(isActive === 'true' ? 1 : 0);
     } else {
       // Por defecto, solo mostrar restaurantes activos
-      whereConditions.push('is_active = true');
+      whereConditions.push('r.is_active = true');
     }
 
     // Filtro por ciudad
@@ -382,18 +386,20 @@ const getPublicRestaurants = async (req, res) => {
     // Consultar restaurantes con información adicional
     const { rows: restaurants } = await executeQuery(
       `SELECT
-        id, name, slug, email, phone, address, city, country,
-        subscription_plan, is_active, created_at, updated_at
-      FROM restaurants
+        r.id, r.name, r.slug, r.email, r.phone, r.address, r.city, r.country,
+        r.subscription_plan_id, r.subscription_status, r.is_active, r.created_at, r.updated_at,
+        sp.name as subscription_plan_name
+      FROM restaurants r
+      LEFT JOIN subscription_plans sp ON r.subscription_plan_id = sp.id
       WHERE ${whereClause}
-      ORDER BY is_active DESC, name ASC
+      ORDER BY r.is_active DESC, r.name ASC
       LIMIT ? OFFSET ?`,
       [...queryParams, parseInt(limit), offset]
     );
 
     // Obtener el conteo total
     const { rows: countRows } = await executeQuery(
-      `SELECT COUNT(*) as total FROM restaurants WHERE ${whereClause}`,
+      `SELECT COUNT(*) as total FROM restaurants r WHERE ${whereClause}`,
       queryParams
     );
 
@@ -441,7 +447,7 @@ const getPublicRestaurants = async (req, res) => {
             address: restaurant.address,
             city: restaurant.city,
             country: restaurant.country,
-            subscriptionPlan: restaurant.subscription_plan,
+            subscriptionPlan: restaurant.subscription_plan_name || 'starter',
             isActive: restaurant.is_active,
             
             // Datos enriquecidos
@@ -474,7 +480,7 @@ const getPublicRestaurants = async (req, res) => {
           // Retornar datos básicos si hay error
           return {
             ...restaurant,
-            subscriptionPlan: restaurant.subscription_plan,
+            subscriptionPlan: restaurant.subscription_plan_name || 'starter',
             totalSongs: 0,
             queueLength: 0,
             activeCustomers: 0,

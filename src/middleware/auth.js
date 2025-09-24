@@ -225,10 +225,104 @@ const requireSuperAdmin = (req, res, next) => {
   }
 };
 
+// Middleware para verificar suscripción activa de restaurante
+const requireActiveSubscription = async (req, res, next) => {
+  try {
+    if (req.user && req.user.type === 'restaurant') {
+      const { rows } = await executeQuery(
+        `SELECT subscription_status, subscription_end_date
+         FROM restaurants
+         WHERE id = ?`,
+        [req.user.id]
+      );
+
+      if (rows.length > 0) {
+        const { subscription_status, subscription_end_date } = rows[0];
+
+        // Verificar si la suscripción está activa
+        if (subscription_status !== 'active') {
+          return res.status(403).json({
+            success: false,
+            message: 'Active subscription required',
+            subscriptionStatus: subscription_status
+          });
+        }
+
+        // Verificar si la suscripción no ha expirado
+        if (subscription_end_date && new Date(subscription_end_date) < new Date()) {
+          return res.status(403).json({
+            success: false,
+            message: 'Subscription expired',
+            expiredAt: subscription_end_date
+          });
+        }
+
+        // Agregar información de suscripción al request
+        req.user.subscriptionStatus = subscription_status;
+        req.user.subscriptionEndDate = subscription_end_date;
+      }
+    }
+
+    next();
+  } catch (error) {
+    logger.error('Subscription verification error:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Subscription verification failed'
+    });
+  }
+};
+
+// Middleware para verificar permisos de suscripción por plan
+const requireSubscriptionPlan = (requiredPlans) => {
+  return async (req, res, next) => {
+    try {
+      if (req.user && req.user.type === 'restaurant') {
+        const { rows } = await executeQuery(
+          `SELECT subscription_plan_id, subscription_status
+           FROM restaurants
+           WHERE id = ?`,
+          [req.user.id]
+        );
+
+        if (rows.length > 0) {
+          const { subscription_plan_id, subscription_status } = rows[0];
+
+          if (subscription_status !== 'active') {
+            return res.status(403).json({
+              success: false,
+              message: 'Active subscription required'
+            });
+          }
+
+          if (requiredPlans && !requiredPlans.includes(subscription_plan_id)) {
+            return res.status(403).json({
+              success: false,
+              message: 'Insufficient subscription plan',
+              requiredPlans,
+              currentPlan: subscription_plan_id
+            });
+          }
+        }
+      }
+
+      next();
+    } catch (error) {
+      logger.error('Subscription plan verification error:', error.message);
+      res.status(500).json({
+        success: false,
+        message: 'Subscription plan verification failed'
+      });
+    }
+  };
+};
+
 module.exports = {
   authenticateToken,
   requireRestaurant,
   requireRegisteredUser,
   optionalAuth,
-  requireSuperAdmin
+  requireSuperAdmin,
+  requireActiveSubscription,
+  requireSubscriptionPlan
 };

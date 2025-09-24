@@ -217,10 +217,12 @@ const loginRestaurant = async (req, res) => {
 
     // Buscar restaurante
     const { rows } = await executeQuery(
-      `SELECT id, name, owner_name, slug, email, password, phone, city, country,
-              website, description, cuisine_type, is_active, verified, last_login_at,
-              subscription_plan, created_at
-       FROM restaurants WHERE email = ?`,
+      `SELECT r.id, r.name, r.owner_name, r.slug, r.email, r.password, r.phone, r.city, r.country,
+              r.website, r.description, r.cuisine_type, r.is_active, r.verified, r.last_login_at,
+              r.subscription_plan_id, r.subscription_status, r.created_at, sp.name as subscription_plan_name
+       FROM restaurants r
+       LEFT JOIN subscription_plans sp ON r.subscription_plan_id = sp.id
+       WHERE r.email = ?`,
       [email]
     );
 
@@ -287,7 +289,7 @@ const loginRestaurant = async (req, res) => {
           website: restaurant.website,
           description: restaurant.description,
           cuisineType: restaurant.cuisine_type,
-          subscriptionPlan: restaurant.subscription_plan,
+          subscriptionPlan: restaurant.subscription_plan_name || 'starter',
           verified: restaurant.verified,
           qrCode: qrCodePath,
           createdAt: restaurant.created_at
@@ -667,11 +669,14 @@ const getProfile = async (req, res) => {
 
     if (user.type === 'restaurant') {
       const { rows } = await executeQuery(
-        `SELECT id, name, owner_name, slug, email, phone, address, city, country, 
-                website, description, cuisine_type, price_range, rating, total_reviews,
-                verified, timezone, max_requests_per_user, queue_limit, auto_play, 
-                allow_explicit, subscription_plan, created_at, updated_at
-         FROM restaurants WHERE id = ?`,
+        `SELECT r.id, r.name, r.owner_name, r.slug, r.email, r.phone, r.address, r.city, r.country,
+                r.website, r.description, r.cuisine_type, r.price_range, r.rating, r.total_reviews,
+                r.verified, r.timezone, r.max_requests_per_user, r.queue_limit, r.auto_play,
+                r.allow_explicit, r.subscription_plan_id, r.subscription_status, r.created_at, r.updated_at,
+                sp.name as subscription_plan_name
+         FROM restaurants r
+         LEFT JOIN subscription_plans sp ON r.subscription_plan_id = sp.id
+         WHERE r.id = ?`,
         [user.id]
       );
 
